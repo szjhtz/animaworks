@@ -222,6 +222,39 @@ def _should_prefer_cli_exec(trigger: str) -> bool:
     return _is_desktop_extension_codex(get_codex_executable())
 
 
+def _close_stream_transport(stream: Any, stream_name: str) -> None:
+    """Best-effort close for subprocess stdio objects.
+
+    ``asyncio`` subprocess readers expose the underlying pipe transport via a
+    private ``_transport`` attribute, while writers expose ``close()``.  Close
+    both when available so parent-side pipe descriptors do not linger across
+    repeated background runs.
+    """
+    if stream is None:
+        return
+
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            logger.debug("Failed to close Codex subprocess %s stream", stream_name, exc_info=True)
+
+    transport = getattr(stream, "_transport", None) or getattr(stream, "transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:
+            logger.debug("Failed to close Codex subprocess %s transport", stream_name, exc_info=True)
+
+
+def _close_subprocess_stdio(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort close of parent-side subprocess stdio transports."""
+    _close_stream_transport(getattr(proc, "stdin", None), "stdin")
+    _close_stream_transport(getattr(proc, "stdout", None), "stdout")
+    _close_stream_transport(getattr(proc, "stderr", None), "stderr")
+
+
 def _extract_item_text(item: Any) -> str:
     """Extract text content from a Codex completed item."""
     if hasattr(item, "content"):
@@ -494,6 +527,7 @@ def _patch_codex_exec_stream_limit(exec_: Any) -> None:
             try:
                 proc.kill()
             finally:
+                _close_subprocess_stdio(proc)
                 raise CodexExecError("Child process missing stdin/stdout")
 
         async def _read_stderr(stream, fatal_future: asyncio.Future[str]):  # type: ignore[no-untyped-def]
@@ -573,6 +607,7 @@ def _patch_codex_exec_stream_limit(exec_: Any) -> None:
                     pass
             stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
+            _close_subprocess_stdio(proc)
 
     exec_.run = _patched_run
     logger.info(
@@ -837,6 +872,7 @@ class CodexSDKExecutor(BaseExecutor):
                 proc.kill()
             except ProcessLookupError:
                 pass
+            _close_subprocess_stdio(proc)
             raise RuntimeError("Codex CLI exec fallback missing stdin/stdout")
 
         stderr_chunks: list[bytes] = []
@@ -948,6 +984,7 @@ class CodexSDKExecutor(BaseExecutor):
                 await proc.wait()
             stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
+            _close_subprocess_stdio(proc)
 
         full_text = "\n".join(response_parts)
         if not full_text and tool_records:

@@ -21,6 +21,7 @@ from core.execution.base import ExecutionResult
 from core.execution.codex_sdk import (
     CodexSDKExecutor,
     _clear_thread_id,
+    _close_subprocess_stdio,
     _codex_item_tool_name,
     _default_home_dir,
     _default_path_env,
@@ -226,7 +227,9 @@ class TestHelpers:
         monkeypatch.setattr("core.execution.codex_sdk.sys.platform", "win32")
         monkeypatch.setattr(
             "core.execution.codex_sdk.get_codex_executable",
-            lambda: r"C:\Users\cmnt\.antigravity\extensions\openai.chatgpt-26.313.41514-win32-x64\bin\windows-x86_64\codex.exe",
+            lambda: (
+                r"C:\Users\cmnt\.antigravity\extensions\openai.chatgpt-26.313.41514-win32-x64\bin\windows-x86_64\codex.exe"
+            ),
         )
         assert _should_prefer_cli_exec("inbox")
         assert _should_prefer_cli_exec("task:demo")
@@ -301,6 +304,29 @@ class TestHelpers:
             await stream.__anext__()
 
         assert proc.kill_calls == 1
+
+    def test_close_subprocess_stdio_closes_writer_and_reader_transports(self):
+        class _FakeClosable:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        class _FakeReader:
+            def __init__(self):
+                self._transport = _FakeClosable()
+
+        stdin = _FakeClosable()
+        stdout = _FakeReader()
+        stderr = _FakeReader()
+        proc = SimpleNamespace(stdin=stdin, stdout=stdout, stderr=stderr)
+
+        _close_subprocess_stdio(proc)
+
+        assert stdin.close_calls == 1
+        assert stdout._transport.close_calls == 1
+        assert stderr._transport.close_calls == 1
 
 
 # ── Session persistence tests ────────────────────────────────
@@ -434,7 +460,14 @@ class TestConfigWriting:
     def test_write_codex_config_restricted_sandbox(self, model_config, anima_dir):
         """Restricted file_roots produces workspace-write with writable_roots."""
         import json
-        perms = {"version": 1, "file_roots": [str(anima_dir)], "commands": {"allow_all": True, "allow": [], "deny": []}, "external_tools": {"allow_all": True, "allow": [], "deny": []}, "tool_creation": {"personal": True, "shared": False}}
+
+        perms = {
+            "version": 1,
+            "file_roots": [str(anima_dir)],
+            "commands": {"allow_all": True, "allow": [], "deny": []},
+            "external_tools": {"allow_all": True, "allow": [], "deny": []},
+            "tool_creation": {"personal": True, "shared": False},
+        }
         (anima_dir / "permissions.json").write_text(json.dumps(perms), encoding="utf-8")
         exc = CodexSDKExecutor(model_config=model_config, anima_dir=anima_dir)
         exc._write_codex_config("prompt")
