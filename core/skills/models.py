@@ -182,6 +182,32 @@ class SkillCuratorEvent(BaseModel):
     proposal_path: str | None = None
 
 
+class SkillBundle(BaseModel):
+    """A staged skill bundle resolved from an import source."""
+
+    source_type: str
+    source_identifier: str
+    staging_path: str
+    skill_md_path: str
+    resolved_commit: str | None = None
+
+
+class SkillHubLockEntry(BaseModel):
+    """Append-only provenance lock entry for Skill Hub operations."""
+
+    ts: str
+    action: str
+    skill_name: str
+    target: str
+    source_type: str | None = None
+    source_identifier: str | None = None
+    resolved_commit: str | None = None
+    scan_verdict: str | None = None
+    installed_path: str | None = None
+    actor: str = "cli"
+    reason: str = ""
+
+
 def _coerce_str_list(value: object) -> list[str]:
     """Normalize YAML scalar/list metadata fields into a string list."""
     if value is None:

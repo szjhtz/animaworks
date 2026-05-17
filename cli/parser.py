@@ -254,6 +254,11 @@ def cli_main() -> None:
 
     setup_index_command(sub)
 
+    # ── Skills ────────────────────────────────────────────
+    from cli.commands.skills import register_skills_command
+
+    register_skills_command(sub)
+
     # ── Config ────────────────────────────────────────────
     from core.config.cli import (
         cmd_config_dispatch,
