@@ -21,6 +21,20 @@ from core.skills.curator import (
 from core.skills.guard import SkillScanner
 from core.skills.hub import SkillHub, SkillHubResult
 from core.skills.index import SkillIndex
+from core.skills.activation import (
+    ActiveSkillAttachment,
+    ActiveSkillContextResult,
+    ActiveSkillItem,
+    ActiveSkillRejection,
+    ActiveSkillResolution,
+    ActiveSkillWarning,
+    build_active_skill_context,
+    get_active_skill_refs,
+    get_active_skill_state,
+    list_skill_catalog,
+    set_active_skill_refs,
+    validate_thread_id,
+)
 from core.skills.loader import (
     is_skill_blocked,
     is_skill_loadable,
@@ -88,14 +102,26 @@ __all__ = [
     "SkillUsageEventType",
     "SkillUsageStats",
     "SkillUsageTracker",
+    "ActiveSkillAttachment",
+    "ActiveSkillContextResult",
+    "ActiveSkillItem",
+    "ActiveSkillRejection",
+    "ActiveSkillResolution",
+    "ActiveSkillWarning",
     "ThreatPattern",
     "ProcedurePromotionCandidate",
     "ProcedureToSkillConverter",
     "PromotionPolicy",
+    "build_active_skill_context",
+    "get_active_skill_refs",
+    "get_active_skill_state",
     "is_skill_blocked",
     "is_skill_loadable",
+    "list_skill_catalog",
     "load_skill_body",
     "load_skill_document",
     "load_skill_metadata",
+    "set_active_skill_refs",
     "skill_access_decision",
+    "validate_thread_id",
 ]
