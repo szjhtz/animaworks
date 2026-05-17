@@ -12,13 +12,14 @@ Re-exports for convenience::
     from core.skills import load_skill_metadata, load_skill_document
 """
 
-from core.skills.guard import SkillScanner
 from core.skills.curator import (
     CuratorReplay,
     DuplicateCandidate,
     LifecycleSuggestion,
     SkillCurator,
 )
+from core.skills.guard import SkillScanner
+from core.skills.hub import SkillHub, SkillHubResult
 from core.skills.index import SkillIndex
 from core.skills.loader import (
     is_skill_blocked,
@@ -31,8 +32,10 @@ from core.skills.loader import (
 from core.skills.models import (
     ScanFinding,
     ScanResult,
+    SkillBundle,
     SkillCuratorEvent,
     SkillCuratorEventType,
+    SkillHubLockEntry,
     SkillLifecycleState,
     SkillMetadata,
     SkillRiskMetadata,
@@ -58,6 +61,7 @@ from core.skills.usage import SkillUsageTracker
 __all__ = [
     "ScanFinding",
     "ScanResult",
+    "SkillBundle",
     "CuratorReplay",
     "DuplicateCandidate",
     "LifecycleSuggestion",
@@ -65,6 +69,7 @@ __all__ = [
     "SkillIndex",
     "SkillCuratorEvent",
     "SkillCuratorEventType",
+    "SkillHubLockEntry",
     "SkillLifecycleState",
     "SkillMetadata",
     "SkillPromotionResult",
@@ -74,6 +79,8 @@ __all__ = [
     "SkillRoutingMetadata",
     "SkillScanVerdict",
     "SkillScanner",
+    "SkillHub",
+    "SkillHubResult",
     "SkillSecurityScan",
     "SkillSource",
     "SkillTrustLevel",
