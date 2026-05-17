@@ -107,6 +107,7 @@ class HeartbeatMixin:
           2. config.heartbeat.default_model (global)
           3. None (use main model)
         """
+        from core.config.model_config import _FAMILY_CREDENTIAL_MAP, _model_family, infer_mode_s_auth
         from core.config.models import load_config, resolve_execution_mode
         from core.schemas import ModelConfig
 
@@ -127,15 +128,38 @@ class HeartbeatMixin:
         bg_resolved_mode = resolve_execution_mode(config, bg_model)
 
         bg_credential = self.agent.model_config.background_credential
-        new_config: ModelConfig = self.agent.model_config.model_copy(
-            update={"model": bg_model, "resolved_mode": bg_resolved_mode},
-        )
+        bg_family = _model_family(bg_model)
+        main_family = _model_family(self.agent.model_config.model)
+        if not bg_credential and bg_family != main_family:
+            mapped_credential = _FAMILY_CREDENTIAL_MAP.get(bg_family)
+            if mapped_credential in config.credentials:
+                bg_credential = mapped_credential
+
+        updates: dict[str, Any] = {
+            "model": bg_model,
+            "resolved_mode": bg_resolved_mode,
+        }
         if bg_credential:
             if bg_credential in config.credentials:
                 cred = config.credentials[bg_credential]
-                new_config.api_key = cred.api_key or None
-                new_config.api_base_url = cred.base_url or None
-                new_config.extra_keys = dict(cred.keys) if cred.keys else {}
+                updates.update(
+                    {
+                        "background_credential": bg_credential,
+                        "api_key": cred.api_key or None,
+                        "api_key_env": f"{bg_credential.upper()}_API_KEY",
+                        "api_base_url": cred.base_url or None,
+                        "extra_keys": dict(cred.keys) if cred.keys else {},
+                    }
+                )
+                if bg_resolved_mode == "S" and not self.agent.model_config.mode_s_auth:
+                    updates["mode_s_auth"] = infer_mode_s_auth(
+                        mode=bg_resolved_mode,
+                        credential_name=bg_credential,
+                        config=config,
+                    )
+                elif bg_resolved_mode != "S":
+                    updates["mode_s_auth"] = None
+        new_config: ModelConfig = self.agent.model_config.model_copy(update=updates)
         return new_config
 
     # ── Heartbeat history ────────────────────────────────────
