@@ -454,12 +454,14 @@ def _build_group4(
     prompt_store: Any,
     is_heartbeat: bool,
     is_background_auto: bool,
+    is_chat: bool,
     is_task: bool,
     tool_registry: list[str] | None,
     personal_tools: dict[str, str] | None,
     _ss: dict[str, str],
     _fs: dict[str, str],
     message: str = "",
+    thread_id: str = "default",
 ) -> tuple[list[SectionEntry], list[Path], list[str], list[str]]:
     """Group 4: Memory guide, DK, common knowledge, tool guides.
 
@@ -586,6 +588,17 @@ def _build_group4(
             if "machine" in cats:
                 et += t("builder.machine_hint")
             _add(et, "external_tools", 2)
+
+    if is_chat:
+        try:
+            from core.skills.activation import build_active_skill_context
+
+            active_context = build_active_skill_context(pd, thread_id=thread_id)
+            rendered_active = active_context.render()
+            if rendered_active:
+                _add(rendered_active, "active_skills", 1, "elastic")
+        except Exception:
+            logger.debug("Skipped active skill context injection", exc_info=True)
 
     # ── Skill catalog (Agent Skills standard) ───
     # Uses SkillIndex which excludes blocked/quarantine skills. Background
@@ -748,6 +761,7 @@ def build_system_prompt(
     context_window: int = 200_000,
     system_budget: int | None = None,
     pending_human_notifications: str = "",
+    thread_id: str = "default",
 ) -> BuildResult:
     """Construct the full system prompt from Markdown files.
 
@@ -821,12 +835,14 @@ def build_system_prompt(
         prompt_store,
         is_heartbeat,
         is_background_auto,
+        is_chat,
         is_task,
         tool_registry,
         personal_tools,
         _ss,
         _fs,
         message=message,
+        thread_id=thread_id,
     )
     sections += g4
     sections += _build_group5(
