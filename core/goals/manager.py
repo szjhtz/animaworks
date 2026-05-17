@@ -138,6 +138,8 @@ class GoalManager:
             },
             actor=actor,
         )
+        if judgment.failed_open:
+            self._record_fail_open_activity(state, judgment)
         return self.get_goal(goal_id)
 
     def enqueue_continuation(
@@ -254,6 +256,20 @@ class GoalManager:
             summary=summary,
             tool="call_human",
             meta={"goal_id": state.goal_id, "auto_emitted": True},
+            safe=True,
+        )
+
+    def _record_fail_open_activity(self, state: GoalState, judgment: GoalJudgment) -> None:
+        summary = f"Goal judge failed open: {state.title or state.objective[:80]}"
+        ActivityLogger(self.anima_dir).log(
+            "goal_judge_failed_open",
+            content=judgment.reason,
+            summary=summary,
+            meta={
+                "goal_id": state.goal_id,
+                "task_id": judgment.task_id,
+                "iteration": judgment.iteration,
+            },
             safe=True,
         )
 

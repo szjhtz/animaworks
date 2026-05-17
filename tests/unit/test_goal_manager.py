@@ -170,11 +170,23 @@ def test_goal_tool_schema_and_handler(tmp_path: Path, monkeypatch) -> None:
 
     assert result["status"] == "active"
     assert result["objective"] == "Prepare a release"
+    TaskQueueManager(anima_dir).add_task(
+        source="anima",
+        original_instruction="release",
+        assignee="alice",
+        summary="Release task",
+        task_id="release-task",
+        status="pending",
+        meta={"executor": "taskexec", "goal_id": result["goal_id"], "goal_iteration": 1},
+    )
     all_status = json.loads(handler.handle("goal", {"action": "status"}))
     assert [item["goal_id"] for item in all_status] == [result["goal_id"]]
+    assert all_status[0]["related_tasks"][0]["task_id"] == "release-task"
+    assert all_status[0]["related_tasks"][0]["status"] == "pending"
 
     status = json.loads(handler.handle("goal", {"action": "status", "goal_id": result["goal_id"]}))
     assert status["goal_id"] == result["goal_id"]
+    assert status["related_tasks"][0]["summary"] == "Release task"
 
     paused = json.loads(handler.handle("goal", {"action": "pause", "goal_id": result["goal_id"], "reason": "wait"}))
     assert paused["status"] == "paused"
@@ -269,6 +281,29 @@ def test_goal_judgment_parser_fail_open_and_valid_json() -> None:
     assert failed_open.verdict == "continue"
     assert failed_open.failed_open is True
     assert failed_open.reason == "judge_parse_failed"
+
+
+def test_fail_open_judgment_records_activity(tmp_path: Path, monkeypatch) -> None:
+    anima_dir = _anima_dir(tmp_path, monkeypatch)
+    manager = GoalManager(anima_dir)
+    state = manager.set_goal(objective="Recover flaky judge")
+
+    manager.record_judgment(
+        state.goal_id,
+        GoalJudgment(
+            goal_id=state.goal_id,
+            task_id="t1",
+            verdict="continue",
+            reason="judge_error:TimeoutError",
+            failed_open=True,
+            iteration=1,
+        ),
+        result_summary="judge timed out",
+    )
+
+    activity_text = "\n".join(path.read_text(encoding="utf-8") for path in (anima_dir / "activity_log").glob("*.jsonl"))
+    assert "goal_judge_failed_open" in activity_text
+    assert "judge_error:TimeoutError" in activity_text
 
 
 async def test_goal_judge_uses_injected_callable(tmp_path: Path, monkeypatch) -> None:

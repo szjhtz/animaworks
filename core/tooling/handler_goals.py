@@ -54,9 +54,9 @@ class GoalsToolsMixin:
                     state = manager.get_goal(str(goal_id))
                     if state is None:
                         return _error_result("GoalNotFound", f"Goal not found: {goal_id}")
-                    return _json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2)
+                    return _json.dumps(self._goal_status_payload(manager, state), ensure_ascii=False, indent=2)
                 return _json.dumps(
-                    [goal.model_dump(mode="json") for goal in manager.list_goals()],
+                    [self._goal_status_payload(manager, goal) for goal in manager.list_goals()],
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -136,6 +136,11 @@ class GoalsToolsMixin:
         current = manager.current_goal()
         return current.goal_id if current else ""
 
+    def _goal_status_payload(self, manager: GoalManager, state) -> dict[str, Any]:
+        payload = state.model_dump(mode="json")
+        payload["related_tasks"] = _related_task_payloads(manager.anima_dir, state)
+        return payload
+
 
 def _string_list(value: object) -> list[str]:
     if value is None:
@@ -145,6 +150,35 @@ def _string_list(value: object) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item).strip() for item in value if str(item).strip()]
     return [str(value).strip()] if str(value).strip() else []
+
+
+def _related_task_payloads(anima_dir: Path, state) -> list[dict[str, Any]]:
+    try:
+        from core.memory.task_queue import TaskQueueManager
+
+        queue = TaskQueueManager(anima_dir)
+        tasks = {task.task_id: task for task in queue.list_goal_tasks(state.goal_id)}
+        for task_id in state.related_task_ids:
+            if task_id not in tasks:
+                task = queue.get_task_by_id(task_id)
+                if task is not None:
+                    tasks[task_id] = task
+        ordered = sorted(tasks.values(), key=lambda task: task.updated_at, reverse=True)
+        return [
+            {
+                "task_id": task.task_id,
+                "status": task.status,
+                "summary": task.summary,
+                "source": task.source,
+                "updated_at": task.updated_at,
+                "goal_iteration": task.meta.get("goal_iteration"),
+                "executor": task.meta.get("executor"),
+            }
+            for task in ordered
+        ]
+    except Exception:
+        logger.debug("Failed to build goal related task payloads", exc_info=True)
+        return []
 
 
 def _run_sync(coro):

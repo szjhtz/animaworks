@@ -473,6 +473,16 @@ class TaskQueueManager:
             return task
         return None
 
+    def list_goal_tasks(self, goal_id: str) -> list[TaskEntry]:
+        """Return all queue tasks linked to a persistent goal."""
+        if not goal_id:
+            return []
+        return sorted(
+            [task for task in self._load_all().values() if task.meta.get("goal_id") == goal_id],
+            key=lambda task: task.updated_at,
+            reverse=True,
+        )
+
     def _goal_task_suppressed_by_taskboard(self, task_id: str) -> bool:
         try:
             from core.taskboard.models import AttentionVisibility
