@@ -99,6 +99,8 @@ def curator_allows_access(
     """Return whether a skill can be loaded, plus a machine-readable reason."""
     if meta.trust_level == SkillTrustLevel.blocked:
         return False, "trust_level_blocked"
+    if meta.trust_level == SkillTrustLevel.quarantine:
+        return False, "trust_level_quarantine"
     if meta.security.verdict == SkillScanVerdict.dangerous:
         return False, "security_dangerous"
     state = meta.lifecycle_state

@@ -139,6 +139,42 @@ def test_index_router_and_read_memory_file_block_curator_archived_skill(tmp_path
     assert "curator_archived" in result
 
 
+def test_skill_index_invalidates_when_curator_state_changes(tmp_path: Path) -> None:
+    anima_dir = tmp_path / "alice"
+    common_dir = tmp_path / "common_skills"
+    common_dir.mkdir()
+    _write_skill(anima_dir, "old-skill")
+    _write_skill(anima_dir, "categorized-skill", description="No matching text", extra="category: operations\n")
+    index = SkillIndex(anima_dir / "skills", common_dir, anima_dir=anima_dir)
+
+    assert "old-skill" in {meta.name for meta in index.all_skills}
+    assert [meta.name for meta in index.search("operations")] == ["categorized-skill"]
+    SkillCurator(anima_dir).archive_skill("old-skill", reason="unused")
+
+    assert "old-skill" not in {meta.name for meta in index.all_skills}
+
+
+def test_read_memory_file_blocks_quarantined_skill(tmp_path: Path) -> None:
+    anima_dir = tmp_path / "alice"
+    _write_skill(anima_dir, "draft-skill", extra="trust_level: quarantine\n")
+    mixin = MagicMock(spec=MemoryToolsMixin)
+    mixin._anima_dir = anima_dir
+    mixin._superuser = False
+    mixin._subordinate_activity_dirs = []
+    mixin._subordinate_management_files = []
+    mixin._descendant_activity_dirs = []
+    mixin._descendant_state_files = []
+    mixin._descendant_state_dirs = []
+    mixin._read_paths = set()
+    mixin._is_skill_path = MemoryToolsMixin._is_skill_path
+    mixin._record_skill_view_if_applicable = MagicMock()
+
+    result = MemoryToolsMixin._handle_read_memory_file(mixin, {"path": "skills/draft-skill/SKILL.md"})
+
+    assert "SkillBlocked" in result
+    assert "trust_level_quarantine" in result
+
+
 def test_restore_refuses_trust_blocked_skill(tmp_path: Path) -> None:
     anima_dir = tmp_path / "alice"
     anima_dir.mkdir()
@@ -192,6 +228,21 @@ def test_rag_indexer_skips_archived_skill(tmp_path: Path) -> None:
     anima_dir = tmp_path / "alice"
     skill_md = _write_skill(anima_dir, "old-skill")
     SkillCurator(anima_dir).archive_skill("old-skill", reason="unused")
+    vector_store = MagicMock()
+    indexer = MemoryIndexer(vector_store, "alice", anima_dir, embedding_model=MagicMock())
+
+    chunks = indexer.index_file(skill_md, memory_type="skills", force=True)
+
+    assert chunks == 0
+    vector_store.create_collection.assert_not_called()
+    vector_store.upsert.assert_not_called()
+
+
+def test_rag_indexer_skips_quarantined_skill(tmp_path: Path) -> None:
+    from core.memory.rag.indexer import MemoryIndexer
+
+    anima_dir = tmp_path / "alice"
+    skill_md = _write_skill(anima_dir, "draft-skill", extra="trust_level: quarantine\n")
     vector_store = MagicMock()
     indexer = MemoryIndexer(vector_store, "alice", anima_dir, embedding_model=MagicMock())
 
@@ -262,6 +313,59 @@ def test_rag_retriever_filters_archived_skill_chunks_left_in_vector_store(tmp_pa
     assert [result.doc_id for result in results] == ["alice/skills/new-skill/SKILL.md#0"]
 
 
+def test_rag_retriever_filters_archived_common_skill_chunks_from_shared_vectors(tmp_path: Path) -> None:
+    from core.memory.rag.retriever import MemoryRetriever
+
+    anima_dir = tmp_path / "alice"
+    anima_dir.mkdir()
+    common_dir = tmp_path / "common_skills"
+    common_dir.mkdir()
+    for name in ("old-common", "new-common"):
+        skill_dir = common_dir / name
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            f"name: {name}\n"
+            f"description: {name} shared workflow\n"
+            "use_when: [shared workflow]\n"
+            "---\n\n"
+            f"# {name}\n",
+            encoding="utf-8",
+        )
+    SkillCurator(anima_dir).archive_skill("old-common", reason="unused")
+    vector_store = MagicMock()
+    vector_store.query.side_effect = [
+        [],
+        [
+            SearchResult(
+                document=Document(
+                    id="shared/common_skills/old-common/SKILL.md#0",
+                    content="old body",
+                    metadata={"source_file": "common_skills/old-common/SKILL.md"},
+                ),
+                score=0.9,
+            ),
+            SearchResult(
+                document=Document(
+                    id="shared/common_skills/new-common/SKILL.md#0",
+                    content="new body",
+                    metadata={"source_file": "common_skills/new-common/SKILL.md"},
+                ),
+                score=0.8,
+            ),
+        ],
+    ]
+    indexer = MagicMock()
+    indexer.anima_dir = anima_dir
+    indexer._generate_embeddings.return_value = [[0.1, 0.2]]
+    retriever = MemoryRetriever(vector_store, indexer, anima_dir / "knowledge")
+
+    with patch("core.paths.get_data_dir", return_value=tmp_path):
+        results = retriever.search("shared workflow", "alice", memory_type="skills", top_k=5, include_shared=True)
+
+    assert [result.doc_id for result in results] == ["shared/common_skills/new-common/SKILL.md#0"]
+
+
 def test_cron_skill_context_attaches_allowed_and_records_rejected_reason(tmp_path: Path) -> None:
     anima_dir = tmp_path / "alice"
     common_dir = tmp_path / "common_skills"
@@ -278,6 +382,36 @@ def test_cron_skill_context_attaches_allowed_and_records_rejected_reason(tmp_pat
     assert "active-skill" in rendered
     assert "old-skill: curator_archived" in rendered
     assert "missing-skill: not_found" in rendered
+
+
+def test_cron_skill_context_rejects_quarantined_skill_refs(tmp_path: Path) -> None:
+    anima_dir = tmp_path / "alice"
+    common_dir = tmp_path / "common_skills"
+    common_dir.mkdir()
+    _write_skill(anima_dir, "draft-skill", extra="trust_level: quarantine\n")
+    nested_dir = anima_dir / "skills" / "quarantine" / "nested-draft"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: nested-draft\n"
+        "description: Quarantine draft\n"
+        "trust_level: quarantine\n"
+        "---\n\n"
+        "# Nested Draft\n",
+        encoding="utf-8",
+    )
+
+    with patch("core.paths.get_common_skills_dir", return_value=common_dir):
+        result = build_cron_skill_context(
+            anima_dir,
+            ["draft-skill", "skills/quarantine/nested-draft/SKILL.md"],
+        )
+
+    assert not result.attachments
+    assert [(item.ref, item.reason) for item in result.rejections] == [
+        ("draft-skill", "trust_level_quarantine"),
+        ("skills/quarantine/nested-draft/SKILL.md", "trust_level_quarantine"),
+    ]
 
 
 def test_cron_skill_context_handles_empty_refs_and_canonical_paths(tmp_path: Path) -> None:
