@@ -144,6 +144,13 @@ def _rewrite_yamlish_text(text: str, skill_name: str, *, absorbed_into: str | No
                 out.append(new_line)
             i += 1
             continue
+        if _is_scalar_skills_line(stripped):
+            new_line = _rewrite_scalar_skills_line(line, skill_name, absorbed_into)
+            changed = changed or new_line != line
+            if new_line:
+                out.append(new_line)
+            i += 1
+            continue
         if re.match(r"^\s*skills:\s*$", line):
             block, next_i = _consume_skills_block(lines, i)
             new_block = _rewrite_skills_block(block, skill_name, absorbed_into)
@@ -201,6 +208,10 @@ def _is_inline_skills_line(stripped: str) -> bool:
     return stripped.startswith("skills:") and "[" in stripped and "]" in stripped
 
 
+def _is_scalar_skills_line(stripped: str) -> bool:
+    return stripped.startswith("skills:") and "[" not in stripped and stripped != "skills:"
+
+
 def _is_scalar_skill_line(stripped: str) -> bool:
     return stripped.startswith(("skill:", "skill_name:", "skill_pointer:"))
 
@@ -253,6 +264,17 @@ def _rewrite_scalar_skill_line(line: str, skill_name: str, absorbed_into: str | 
     if not absorbed_into:
         return ""
     return f"{prefix}: {absorbed_into}"
+
+
+def _rewrite_scalar_skills_line(line: str, skill_name: str, absorbed_into: str | None) -> str:
+    prefix, value = line.split(":", 1)
+    current = _strip_quotes(value.strip())
+    rewritten = _rewrite_skill_list([current], skill_name, absorbed_into)
+    if rewritten == [current]:
+        return line
+    if not rewritten:
+        return ""
+    return f"{prefix}: {rewritten[0]}"
 
 
 def _rewrite_skill_list(values: list[str], skill_name: str, absorbed_into: str | None) -> list[str]:

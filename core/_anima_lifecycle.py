@@ -605,11 +605,13 @@ class LifecycleMixin:
                 self._status_slots["background"] = "working"
                 self._task_slots["background"] = task_name
 
+                cron_skill_rejections = []
                 prompt = self._build_cron_prompt(
                     task_name,
                     description,
                     command_output=command_output,
                     skills=skills,
+                    skill_rejections_out=cron_skill_rejections,
                 )
 
                 # ── Background model swap ──
@@ -632,10 +634,16 @@ class LifecycleMixin:
                     self._last_activity = now_local()
 
                     # Record cron execution result
+                    rejection_dicts = [
+                        {"ref": rejection.ref, "reason": rejection.reason}
+                        for rejection in cron_skill_rejections
+                    ]
+                    result.cron_skill_rejections = rejection_dicts
                     self.memory.append_cron_log(
                         task_name,
                         summary=result.summary,
                         duration_ms=result.duration_ms,
+                        skill_rejections=rejection_dicts,
                     )
 
                     # Activity log: cron executed
@@ -646,6 +654,7 @@ class LifecycleMixin:
                         meta={
                             "task_name": task_name,
                             "duration_ms": result.duration_ms if result else 0,
+                            "skill_rejections": rejection_dicts,
                         },
                     )
 

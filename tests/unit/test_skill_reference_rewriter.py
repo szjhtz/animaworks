@@ -70,6 +70,10 @@ def test_json_array_and_scalar_skill_rewrites() -> None:
     assert "skill_name: new-skill" in rewritten_scalar
     assert "skill_pointer: other-skill" in rewritten_scalar
 
+    scalar_skills = "skills: old-skill\n"
+    rewritten_skills = rewrite_skill_references_in_text(scalar_skills, "old-skill", absorbed_into=None)
+    assert "skills:" not in rewritten_skills
+
 
 def test_malformed_json_falls_back_to_yamlish_rewrite() -> None:
     text = "{not json}\nskill: old-skill\n"

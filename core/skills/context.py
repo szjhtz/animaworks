@@ -97,6 +97,8 @@ def _resolve_skill_ref(
     ref: str,
     entries: list[SkillMetadata],
 ) -> tuple[SkillMetadata, Path, str] | None:
+    if not _is_safe_ref(ref):
+        return None
     path = _path_from_pointer(anima_dir, ref)
     if path is not None and path.is_file():
         meta = load_skill_metadata(path)
@@ -116,13 +118,13 @@ def _path_from_pointer(anima_dir: Path, ref: str) -> Path | None:
         return None
     path = Path(pointer)
     if path.is_absolute():
-        return path
-    if pointer.startswith("skills/") or pointer.startswith("procedures/"):
-        return anima_dir / path
+        return None
+    if pointer.startswith("skills/"):
+        return _safe_child_path(anima_dir, path)
     if pointer.startswith("common_skills/"):
         from core.paths import get_data_dir
 
-        return get_data_dir() / path
+        return _safe_child_path(get_data_dir(), path)
     return None
 
 
@@ -146,3 +148,27 @@ def _dedupe_refs(skill_refs: list[str]) -> list[str]:
         if value and value not in result:
             result.append(value)
     return result
+
+
+def _is_safe_ref(ref: str) -> bool:
+    value = ref.strip()
+    if not value:
+        return False
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    if value.startswith(("skills/", "common_skills/")):
+        return len(path.parts) >= 3 and path.name == "SKILL.md"
+    return not ("/" in value or "\\" in value)
+
+
+def _safe_child_path(root: Path, relative: Path) -> Path | None:
+    if relative.name != "SKILL.md" or ".." in relative.parts:
+        return None
+    try:
+        candidate = (root / relative).resolve(strict=False)
+        root_resolved = root.resolve(strict=False)
+        candidate.relative_to(root_resolved)
+        return candidate
+    except (OSError, ValueError):
+        return None

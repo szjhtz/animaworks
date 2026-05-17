@@ -105,6 +105,7 @@ class MemoryIndexer:
         self.meta_path = anima_dir / INDEX_META_FILE
         self.index_meta = self._load_index_meta()
         self._skill_curator_replay = None
+        self._skill_curator_state_marker: tuple[int, int] | None = None
 
         # Cache of collection names known to exist in the vector store.
         # Populated lazily by ``_collection_exists()`` so that hash-based
@@ -252,8 +253,14 @@ class MemoryIndexer:
                 from core.skills.loader import load_skill_metadata
 
                 meta = load_skill_metadata(file_path)
-                if self._skill_curator_replay is None:
+                curator_state_path = self.anima_dir / "state" / "skill_curator.jsonl"
+                state_marker = None
+                if curator_state_path.exists():
+                    state_stat = curator_state_path.stat()
+                    state_marker = (state_stat.st_mtime_ns, state_stat.st_size)
+                if self._skill_curator_replay is None or self._skill_curator_state_marker != state_marker:
                     self._skill_curator_replay = replay_curator_state(self.anima_dir)
+                    self._skill_curator_state_marker = state_marker
                 allowed, reason = curator_allows_access(meta, replay=self._skill_curator_replay)
                 if not allowed:
                     logger.info("Skipping non-loadable skill from RAG index: %s (%s)", file_path, reason)

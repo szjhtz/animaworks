@@ -23,6 +23,7 @@ from core.memory.streaming_journal import StreamingJournal
 from core.messenger import InboxItem
 from core.paths import load_prompt
 from core.schemas import CycleResult
+from core.skills.context import SkillContextRejection
 from core.time_utils import now_iso, now_local
 
 logger = logging.getLogger("animaworks.anima")
@@ -415,6 +416,7 @@ class HeartbeatMixin:
         description: str,
         command_output: str | None = None,
         skills: list[str] | None = None,
+        skill_rejections_out: list[SkillContextRejection] | None = None,
     ) -> str:
         """Build cron task prompt with heartbeat-equivalent context.
 
@@ -423,6 +425,7 @@ class HeartbeatMixin:
             description: Task description or instruction.
             command_output: Optional stdout from a preceding command-type cron.
             skills: Optional cron skill references from cron.md.
+            skill_rejections_out: Optional list populated with rejected skill refs.
         """
         parts: list[str] = []
 
@@ -442,9 +445,12 @@ class HeartbeatMixin:
         if skills:
             from core.skills.context import build_cron_skill_context
 
-            skill_context = build_cron_skill_context(self.anima_dir, skills).render()
-            if skill_context:
-                parts.append(skill_context)
+            skill_context = build_cron_skill_context(self.anima_dir, skills)
+            if skill_rejections_out is not None:
+                skill_rejections_out.extend(skill_context.rejections)
+            rendered = skill_context.render()
+            if rendered:
+                parts.append(rendered)
 
         # Shared background context (without dialogue — cron tasks must not inherit chat context)
         parts.extend(self._build_background_context_parts(include_dialogue=False))
