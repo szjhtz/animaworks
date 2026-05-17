@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 _MAX_SKILL_MD_BYTES = 512 * 1024
 
@@ -18,7 +18,7 @@ def stage_url_source(source: str, staging_root: Path) -> Path:
     if not _is_https_url(source):
         raise ValueError("URL skill sources must use https://")
     req = Request(source, headers={"User-Agent": "AnimaWorks-SkillHub/1.0"})
-    with urlopen(req, timeout=15) as response:  # noqa: S310 - explicit user-provided import source
+    with _open_url(req) as response:
         final_url = response.geturl()
         if not _is_https_url(final_url):
             raise ValueError("URL skill source redirected to a non-HTTPS URL")
@@ -37,3 +37,15 @@ def stage_url_source(source: str, staging_root: Path) -> Path:
 
 def _is_https_url(value: str) -> bool:
     return urlparse(value).scheme.lower() == "https"
+
+
+class _HttpsOnlyRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        if not _is_https_url(newurl):
+            raise ValueError("URL skill source redirected to a non-HTTPS URL")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_url(req: Request):
+    opener = build_opener(_HttpsOnlyRedirectHandler())
+    return opener.open(req, timeout=15)

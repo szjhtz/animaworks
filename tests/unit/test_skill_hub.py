@@ -6,6 +6,7 @@ from __future__ import annotations
 
 """Unit tests for Skill Hub importer."""
 
+import base64
 import json
 import subprocess
 from argparse import ArgumentParser, Namespace
@@ -186,7 +187,7 @@ def test_url_source_installs_single_skill_file(tmp_path: Path) -> None:
             assert size == (512 * 1024) + 1
             return b"---\nname: url-skill\ndescription: URL Skill\n---\n\n# URL\n"
 
-    with patch("core.skills.sources.url.urlopen", return_value=_Response()):
+    with patch("core.skills.sources.url._open_url", return_value=_Response()):
         result = SkillHub(data_dir=tmp_path).install("https://example.com/SKILL.md", target="common")
 
     assert result.status == "installed"
@@ -211,35 +212,28 @@ def test_url_source_rejects_oversized_response_with_bounded_read(tmp_path: Path)
             return b"x" * size
 
     with (
-        patch("core.skills.sources.url.urlopen", return_value=_Response()),
+        patch("core.skills.sources.url._open_url", return_value=_Response()),
         pytest.raises(ValueError, match="exceeds 512KB"),
     ):
         stage_url_source("https://example.com/SKILL.md", tmp_path / "stage")
 
 
 def test_url_source_rejects_plaintext_and_downgrade_redirect(tmp_path: Path) -> None:
-    from core.skills.sources.url import stage_url_source
+    from urllib.request import Request
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def geturl(self) -> str:
-            return "http://example.com/SKILL.md"
-
-        def read(self, size: int = -1) -> bytes:
-            raise AssertionError("downgraded redirects must be rejected before reading")
+    from core.skills.sources.url import _HttpsOnlyRedirectHandler, stage_url_source
 
     with pytest.raises(ValueError, match="https"):
         stage_url_source("http://example.com/SKILL.md", tmp_path / "stage-http")
-    with (
-        patch("core.skills.sources.url.urlopen", return_value=_Response()),
-        pytest.raises(ValueError, match="non-HTTPS"),
-    ):
-        stage_url_source("https://example.com/SKILL.md", tmp_path / "stage-redirect")
+    with pytest.raises(ValueError, match="non-HTTPS"):
+        _HttpsOnlyRedirectHandler().redirect_request(
+            Request("https://example.com/SKILL.md"),
+            None,
+            302,
+            "Found",
+            {},
+            "http://example.com/SKILL.md",
+        )
 
 
 def test_github_source_uses_https_fallback_when_gh_missing(tmp_path: Path) -> None:
@@ -254,32 +248,45 @@ def test_github_source_uses_https_fallback_when_gh_missing(tmp_path: Path) -> No
         patch("core.skills.sources.github.shutil.which", return_value=None),
         patch("core.skills.sources.github.stage_url_source", side_effect=_fake_stage_url),
     ):
-        result = SkillHub(data_dir=tmp_path).install("github:owner/repo/path/to/skill", target="common")
+        result = SkillHub(data_dir=tmp_path).install("github:owner/repo/path/to/SKILL.md", target="common")
 
     assert result.status == "installed"
     assert (tmp_path / result.installed_path).is_file()
 
 
-def test_github_source_uses_gh_clone_when_available(tmp_path: Path) -> None:
+def test_github_directory_requires_gh_for_clear_error(tmp_path: Path) -> None:
+    with (
+        patch("core.skills.sources.github.shutil.which", return_value=None),
+        pytest.raises(RuntimeError, match="gh CLI is required"),
+    ):
+        SkillHub(data_dir=tmp_path).install("github:owner/repo/path/to/skill", target="common")
+
+
+def test_github_source_uses_gh_api_when_available(tmp_path: Path) -> None:
+    skill_md = b"---\nname: gh-api\ndescription: GitHub API\n---\n\n# GH API\n"
+
     def _fake_run(cmd, **kwargs):
-        if cmd[:3] == ["gh", "repo", "clone"]:
-            assert "--filter=blob:none" in cmd
-            assert "--sparse" in cmd
-            checkout = Path(cmd[4])
-            _write_source_skill(checkout / "path" / "to", "gh-clone")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        if len(cmd) >= 6 and cmd[0] == "git" and cmd[1] == "-C" and cmd[3:6] == ["sparse-checkout", "set", "--no-cone"]:
-            assert cmd[-3:] == ["set", "--no-cone", "path/to/gh-clone"]
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        if cmd[:3] == ["git", "rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n", stderr="")
+        assert cmd[:2] == ["gh", "api"]
+        endpoint = cmd[2]
+        if endpoint == "repos/owner/repo/contents/path/to/gh-api":
+            stdout = json.dumps(
+                [{"type": "file", "path": "path/to/gh-api/SKILL.md", "size": len(skill_md)}]
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+        if endpoint == "repos/owner/repo/contents/path/to/gh-api/SKILL.md":
+            stdout = json.dumps({"content": base64.b64encode(skill_md).decode("ascii")})
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+        if endpoint == "repos/owner/repo":
+            return subprocess.CompletedProcess(cmd, 0, stdout='{"default_branch":"main"}', stderr="")
+        if endpoint == "repos/owner/repo/commits/main":
+            return subprocess.CompletedProcess(cmd, 0, stdout='{"sha":"abc123"}', stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
     with (
         patch("core.skills.sources.github.shutil.which", return_value="/usr/bin/gh"),
         patch("core.skills.sources.github.subprocess.run", side_effect=_fake_run),
     ):
-        result = SkillHub(data_dir=tmp_path).install("github:owner/repo/path/to/gh-clone", target="common")
+        result = SkillHub(data_dir=tmp_path).install("github:owner/repo/path/to/gh-api", target="common")
 
     assert result.status == "installed"
     entry = json.loads((tmp_path / "shared" / "skill_hub_lock.jsonl").read_text(encoding="utf-8"))
@@ -315,6 +322,17 @@ def test_local_source_rejects_too_many_files_before_copy(tmp_path: Path) -> None
         stage_local_source(str(source), tmp_path / "stage")
 
     assert not (tmp_path / "stage" / "skill").exists()
+
+
+def test_local_directory_without_name_uses_source_directory_name(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "source-name"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("---\ndescription: Missing name\n---\n\n# Missing Name\n", encoding="utf-8")
+
+    result = SkillHub(data_dir=tmp_path).install(str(source), target="common")
+
+    assert result.skill_name == "source-name"
+    assert (tmp_path / "common_skills" / "community" / "source-name" / "SKILL.md").is_file()
 
 
 def test_source_adapters_reject_invalid_inputs(tmp_path: Path) -> None:

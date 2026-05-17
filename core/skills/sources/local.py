@@ -18,11 +18,11 @@ def stage_local_source(source: str, staging_root: Path) -> Path:
     if not source_path.exists():
         raise FileNotFoundError(f"Skill source not found: {source_path}")
 
-    staged = staging_root / "skill"
     if source_path.is_file():
         if source_path.name != "SKILL.md":
             raise ValueError("Local file sources must be named SKILL.md")
         _validate_file_size(source_path)
+        staged = staging_root / _stage_name(source_path.parent)
         staged.mkdir(parents=True)
         shutil.copy2(source_path, staged / "SKILL.md")
         return staged
@@ -31,6 +31,7 @@ def stage_local_source(source: str, staging_root: Path) -> Path:
     if not skill_md.is_file():
         raise FileNotFoundError(f"Skill directory must contain SKILL.md: {source_path}")
     _validate_skill_tree(source_path)
+    staged = staging_root / _stage_name(source_path)
     _copy_skill_tree(source_path, staged)
     return staged
 
@@ -59,6 +60,10 @@ def _validate_file_size(path: Path) -> int:
     if size > MAX_SKILL_FILE_SIZE:
         raise ValueError(f"Skill bundle file exceeds limit ({MAX_SKILL_FILE_SIZE}): {path.name}")
     return size
+
+
+def _stage_name(path: Path) -> str:
+    return path.name or "skill"
 
 
 def _copy_skill_tree(source_dir: Path, target_dir: Path) -> None:
