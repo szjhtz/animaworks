@@ -429,6 +429,11 @@ def cli_main() -> None:
         help="Restore bootstrap artifacts and prepare another bootstrap attempt",
     )
     repair_group.add_argument(
+        "--complete",
+        action="store_true",
+        help="Archive stale bootstrap artifacts and mark a fully defined Anima as completed",
+    )
+    repair_group.add_argument(
         "--fresh",
         action="store_true",
         help="Archive runtime data and recreate a blank Anima while preserving model settings",
