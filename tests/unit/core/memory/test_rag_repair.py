@@ -133,6 +133,68 @@ def test_has_recent_corruption_reads_state_file(data_dir: Path):
     assert RAGRepairService(enabled=True).has_recent_corruption("sora") is True
 
 
+def test_discover_suspect_animas_from_state_and_native_log(data_dir: Path):
+    for name in ("rin", "sora"):
+        anima_dir = data_dir / "animas" / name
+        (anima_dir / "state").mkdir(parents=True)
+        (anima_dir / "identity.md").write_text(f"# {name}", encoding="utf-8")
+    (data_dir / "animas" / "rin" / "vectordb").mkdir()
+    disabled = data_dir / "animas" / "mika"
+    disabled.mkdir(parents=True)
+    (disabled / "identity.md").write_text("# mika", encoding="utf-8")
+    (disabled / "status.json").write_text('{"enabled": false}', encoding="utf-8")
+
+    (data_dir / "animas" / "sora" / "state" / "rag_repair.json").write_text(
+        json.dumps(
+            {
+                "recent_signals": [
+                    {
+                        "at": datetime.now(UTC).isoformat(),
+                        "collection": "sora_knowledge",
+                        "reason": "chroma_error_finding_id",
+                        "source": "query",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = data_dir / "logs" / "server-daemon.log"
+    log_path.parent.mkdir(exist_ok=True)
+    log_path.write_text(
+        f"{datetime.now(UTC).isoformat()} tokio-rt-worker segfault in chromadb_rust_bindings.abi3.so\n",
+        encoding="utf-8",
+    )
+
+    suspects = RAGRepairService(enabled=True).discover_suspect_animas(
+        window_minutes=60,
+        log_paths=[log_path],
+    )
+
+    assert suspects == ["rin", "sora"]
+
+
+def test_repair_animas_if_allowed_runs_each_target(data_dir: Path):
+    service = RAGRepairService(enabled=True)
+    service.repair_anima_if_allowed = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda anima_name, **kwargs: RepairResult(
+            status="success",
+            anima_name=anima_name,
+            reason=kwargs["reason"],
+        )
+    )
+
+    results = service.repair_animas_if_allowed(
+        {"sora", "rin"},
+        reason="startup_chroma_crash_preflight",
+        source="startup_preflight",
+        include_shared=True,
+    )
+
+    assert list(results) == ["rin", "sora"]
+    assert service.repair_anima_if_allowed.call_count == 2
+
+
 def test_request_repair_sync_uses_guard(data_dir: Path):
     (data_dir / "animas" / "sora" / "state").mkdir(parents=True)
     service = RAGRepairService(enabled=True)

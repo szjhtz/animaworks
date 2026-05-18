@@ -13,6 +13,7 @@ broken vectordb and rebuild it from source memory files.
 
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,29 @@ from core.memory.rag.repair_utils import (
 from core.platform.locks import acquire_file_lock, release_file_lock
 
 logger = logging.getLogger("animaworks.rag.repair")
+
+_LOG_TAIL_BYTES = 5_000_000
+_COLLECTION_PATTERNS = (
+    re.compile(r"[Cc]ollection ['\"]([^'\"]+)['\"]"),
+    re.compile(r"\bcollection=([A-Za-z0-9_.:-]+)"),
+)
+_ANIMA_PATTERNS = (
+    re.compile(r"\banima(?:_name)?=([A-Za-z0-9_.:-]+)"),
+    re.compile(r"\banima(?:_name)? ['\"]([^'\"]+)['\"]"),
+)
+_TIMESTAMP_RE = re.compile(
+    r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
+)
+_KNOWN_CORRUPTION_REASONS = {
+    "chroma_error_finding_id",
+    "sqlite_malformed",
+    "chroma_corruption",
+    "hnsw_corruption",
+    "native_segfault",
+    "startup_chroma_crash_preflight",
+    "startup_unclean_exit_preflight",
+    "vector_worker_crash",
+}
 
 
 class RAGRepairService:
@@ -163,6 +187,86 @@ class RAGRepairService:
         state = repair_state.read_state(anima_name)
         return self._contains_recent_signal(state.get("recent_signals", []), cutoff, include_shared=include_shared)
 
+    def list_repairable_animas(self, *, animas_dir: Path | None = None) -> list[str]:
+        """Return enabled anima names that can safely be considered for repair."""
+        if animas_dir is None:
+            from core.paths import get_animas_dir
+
+            animas_dir = get_animas_dir()
+        if not animas_dir.is_dir():
+            return []
+        return [
+            anima_dir.name
+            for anima_dir in sorted(animas_dir.iterdir())
+            if anima_dir.is_dir() and (anima_dir / "identity.md").is_file() and self._anima_enabled(anima_dir)
+        ]
+
+    def discover_suspect_animas(
+        self,
+        *,
+        window_minutes: int | None = None,
+        include_logs: bool = True,
+        animas_dir: Path | None = None,
+        log_paths: list[Path] | None = None,
+    ) -> list[str]:
+        """Discover animas whose RAG DBs have recent corruption evidence.
+
+        Evidence comes from repair state files and recent server logs.  Native
+        ChromaDB segfaults often bypass Python exception handling, so log
+        discovery intentionally treats collection-less native crash lines as
+        evidence for every existing vectordb.
+        """
+        if animas_dir is None:
+            from core.paths import get_animas_dir
+
+            animas_dir = get_animas_dir()
+        cutoff = utc_now() - (timedelta(minutes=window_minutes) if window_minutes is not None else self.window)
+        repairable = self.list_repairable_animas(animas_dir=animas_dir)
+        repairable_set = set(repairable)
+        suspects: set[str] = set()
+
+        for anima_name in repairable:
+            state = repair_state.read_state(anima_name, animas_dir=animas_dir)
+            if self._state_is_suspect(state, cutoff):
+                suspects.add(anima_name)
+
+        if include_logs:
+            for line in self._iter_recent_corruption_log_lines(
+                cutoff=cutoff,
+                log_paths=log_paths,
+            ):
+                owners = self._owners_from_log_line(line, repairable=repairable)
+                if owners:
+                    suspects.update(owner for owner in owners if owner in repairable_set)
+                elif "chromadb_rust_bindings" in line.lower() or "native_segfault" in line.lower():
+                    suspects.update(
+                        anima_name
+                        for anima_name in repairable
+                        if (animas_dir / anima_name / "vectordb").exists()
+                    )
+
+        return [name for name in repairable if name in suspects]
+
+    def repair_animas_if_allowed(
+        self,
+        anima_names: list[str] | tuple[str, ...] | set[str],
+        *,
+        reason: str,
+        source: str,
+        include_shared: bool = False,
+    ) -> dict[str, RepairResult]:
+        """Synchronously repair multiple animas while preserving per-anima guards."""
+        results: dict[str, RepairResult] = {}
+        for anima_name in sorted(dict.fromkeys(anima_names)):
+            results[anima_name] = self.repair_anima_if_allowed(
+                anima_name,
+                reason=reason,
+                collection=None,
+                source=source,
+                include_shared=include_shared,
+            )
+        return results
+
     @staticmethod
     def _contains_recent_signal(signals: list[dict[str, Any]], cutoff: datetime, *, include_shared: bool) -> bool:
         for signal in signals:
@@ -172,6 +276,104 @@ class RAGRepairService:
             if include_shared or not bool(signal.get("shared")):
                 return True
         return False
+
+    @staticmethod
+    def _anima_enabled(anima_dir: Path) -> bool:
+        status_path = anima_dir / "status.json"
+        if not status_path.is_file():
+            return True
+        try:
+            import json
+
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True
+        return bool(data.get("enabled", True)) if isinstance(data, dict) else True
+
+    @staticmethod
+    def _state_is_suspect(state: dict[str, Any], cutoff: datetime) -> bool:
+        if not state:
+            return False
+        signals = state.get("recent_signals")
+        if isinstance(signals, list):
+            for signal in signals:
+                at = parse_dt(signal.get("at"))
+                if at is not None and at >= cutoff:
+                    return True
+
+        reason = state.get("reason") or state.get("last_reason")
+        if reason not in _KNOWN_CORRUPTION_REASONS:
+            return False
+        status = state.get("status")
+        if status not in {"requested", "stopping", "repairing", "failed", "cooldown", "locked"}:
+            return False
+        for key in ("updated_at", "last_failure_at", "last_attempt_at", "requested_at"):
+            at = parse_dt(state.get(key))
+            if at is not None and at >= cutoff:
+                return True
+        return False
+
+    @staticmethod
+    def _default_log_paths() -> list[Path]:
+        from core.paths import get_data_dir
+
+        log_dir = get_data_dir() / "logs"
+        return [
+            log_dir / "server-daemon.log",
+            log_dir / "server-daemon.log.1",
+            log_dir / "restart-helper.log",
+        ]
+
+    def _iter_recent_corruption_log_lines(
+        self,
+        *,
+        cutoff: datetime,
+        log_paths: list[Path] | None,
+    ) -> list[str]:
+        paths = log_paths if log_paths is not None else self._default_log_paths()
+        lines: list[str] = []
+        for path in paths:
+            if not path.is_file():
+                continue
+            try:
+                with path.open("rb") as fh:
+                    try:
+                        fh.seek(-_LOG_TAIL_BYTES, os.SEEK_END)
+                    except OSError:
+                        fh.seek(0)
+                    text = fh.read().decode("utf-8", errors="ignore")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                if not self._log_line_is_recent(line, cutoff):
+                    continue
+                reason = classify_corruption_error(line)
+                if reason or "chromadb_rust_bindings" in line.lower():
+                    lines.append(line)
+        return lines
+
+    @staticmethod
+    def _log_line_is_recent(line: str, cutoff: datetime) -> bool:
+        match = _TIMESTAMP_RE.search(line)
+        if not match:
+            return True
+        at = parse_dt(match.group("ts").replace("Z", "+00:00"))
+        return at is None or at >= cutoff
+
+    @staticmethod
+    def _owners_from_log_line(line: str, *, repairable: list[str]) -> set[str]:
+        owners: set[str] = set()
+        for pattern in _ANIMA_PATTERNS:
+            for match in pattern.finditer(line):
+                owners.add(match.group(1))
+        for pattern in _COLLECTION_PATTERNS:
+            for match in pattern.finditer(line):
+                owner, is_shared = collection_owner(match.group(1))
+                if owner:
+                    owners.add(owner)
+                elif is_shared:
+                    owners.update(repairable)
+        return owners
 
     def request_repair(
         self,
