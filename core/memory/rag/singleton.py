@@ -186,14 +186,27 @@ def get_embedding_model(model_name: str | None = None) -> SentenceTransformer:
         try:
             _embedding_model = SentenceTransformer(resolved_name, cache_folder=str(cache_dir), device=device)
         except Exception as e:
-            if device == "cuda" and "out of memory" in str(e).lower():
-                logger.warning("GPU OOM loading embedding model, falling back to CPU: %s", e)
+            if device == "cuda" and _is_cuda_embedding_load_failure(e):
+                logger.warning("GPU unavailable loading embedding model, falling back to CPU: %s", e)
                 _embedding_model = SentenceTransformer(resolved_name, cache_folder=str(cache_dir), device="cpu")
             else:
                 raise
         _embedding_model_name = resolved_name
         logger.info("Embedding model loaded (singleton)")
     return _embedding_model
+
+
+def _is_cuda_embedding_load_failure(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "cuda",
+            "out of memory",
+            "cudagetdevicecount",
+            "non supported hw",
+        )
+    )
 
 
 def thread_safe_encode(
