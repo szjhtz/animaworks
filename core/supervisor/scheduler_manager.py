@@ -31,7 +31,8 @@ from core.time_utils import get_app_timezone, now_local
 _INDENTED_SCHEDULE_RE = re.compile(r"^\s+schedule:", re.MULTILINE)
 # Cron health check:
 # - interval: how often the health job runs (kept short for timely detection)
-# - window: lookback window for "no executions" detection (widened to avoid false positives for low-frequency crons)
+# - window: lookback window for "no executions" detection
+#   (widened to avoid false positives for low-frequency crons)
 _HEALTH_CHECK_INTERVAL_HOURS = 3
 _HEALTH_CHECK_WINDOW_HOURS = 24
 
@@ -462,9 +463,9 @@ class SchedulerManager:
                 return
 
             # Only treat a missing execution as unhealthy when at least one
-            # cron was actually expected to fire inside the health window.
+            # cron was actually expected to fire inside the no-execution window.
             now = now_local()
-            window_start = now - timedelta(hours=_HEALTH_CHECK_HOURS)
+            window_start = now - timedelta(hours=_HEALTH_CHECK_WINDOW_HOURS)
             if not self._any_cron_expected_in_window(cron_jobs, window_start, now):
                 return
 
