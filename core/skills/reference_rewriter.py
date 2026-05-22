@@ -210,7 +210,11 @@ def _rewrite_json_value(value: Any, skill_name: str, *, absorbed_into: str | Non
         changed = False
         result: dict[str, Any] = {}
         for key, item in value.items():
-            if key in {"skill", "skill_name", "skill_pointer"} and isinstance(item, str) and _skill_ref_matches(item, skill_name):
+            if (
+                key in {"skill", "skill_name", "skill_pointer"}
+                and isinstance(item, str)
+                and _skill_ref_matches(item, skill_name)
+            ):
                 changed = True
                 if absorbed_into:
                     result[key] = absorbed_into
