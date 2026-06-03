@@ -3,6 +3,7 @@ from __future__ import annotations
 # AnimaWorks - Digital Anima Framework
 """Opt-in entity/phrase ranking helpers for memory retrieval."""
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -99,6 +100,8 @@ class EntityBoostConfig:
     category: int | None = None
     categories: tuple[int, ...] = (1, 4)
     ignored_entities: tuple[str, ...] = ()
+    query_entities: tuple[str, ...] = ()
+    prefer_candidate_metadata: bool = True
 
 
 def extract_entities(text: str, *, ignored_entities: tuple[str, ...] = ()) -> set[str]:
@@ -129,19 +132,23 @@ def apply_entity_boost(
     config: EntityBoostConfig | None,
 ) -> list[dict[str, Any]]:
     """Apply a capped additive boost when query and candidate share entity phrases."""
-    if config is None or not config.enabled or config.category not in config.categories:
+    if config is None or not config.enabled:
+        return candidates
+    if config.category is not None and config.category not in config.categories:
         return candidates
 
-    query_entities = extract_entities(query, ignored_entities=config.ignored_entities)
+    query_entities = {
+        _normalize_entity(value)
+        for value in config.query_entities
+        if _valid_entity(_normalize_entity(value), {_normalize_entity(v) for v in config.ignored_entities})
+    }
+    query_entities.update(extract_entities(query, ignored_entities=config.ignored_entities))
     if not query_entities:
         return candidates
 
     boosted: list[dict[str, Any]] = []
     for candidate in candidates:
-        candidate_entities = extract_entities(
-            str(candidate.get("content", "") or ""),
-            ignored_entities=config.ignored_entities,
-        )
+        candidate_entities = _candidate_entities(candidate, config)
         overlap = query_entities & candidate_entities
         if not overlap:
             boosted.append(candidate)
@@ -160,6 +167,44 @@ def apply_entity_boost(
 
     boosted.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
     return boosted
+
+
+def _candidate_entities(candidate: dict[str, Any], config: EntityBoostConfig) -> set[str]:
+    if config.prefer_candidate_metadata:
+        metadata_entities = _metadata_entities(candidate, ignored_entities=config.ignored_entities)
+        if metadata_entities:
+            return metadata_entities
+    return extract_entities(
+        str(candidate.get("content", "") or ""),
+        ignored_entities=config.ignored_entities,
+    )
+
+
+def _metadata_entities(candidate: dict[str, Any], *, ignored_entities: tuple[str, ...]) -> set[str]:
+    ignored = {_normalize_entity(value) for value in ignored_entities}
+    ignored.discard("")
+    values: list[Any] = []
+    for source in (candidate, candidate.get("metadata", {})):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("entities")
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    values.extend(parsed)
+                else:
+                    values.append(raw)
+            except json.JSONDecodeError:
+                values.extend(part.strip() for part in raw.split(","))
+        elif isinstance(raw, (list, tuple, set)):
+            values.extend(raw)
+    entities: set[str] = set()
+    for value in values:
+        _add_entity(entities, str(value), ignored)
+    return entities
 
 
 def _add_entity(target: set[str], value: str, ignored: set[str]) -> None:

@@ -186,8 +186,18 @@ async def extract_and_store_facts(
         return []
 
     if stored:
+        _upsert_fact_entities(anima_dir, stored)
         _index_fact_records(anima_dir, stored, origin=origin)
     return stored
+
+
+def _upsert_fact_entities(anima_dir: Path, records: list[FactRecord]) -> None:
+    try:
+        from core.memory.entity_index import upsert_entities_from_facts
+
+        upsert_entities_from_facts(anima_dir, records)
+    except Exception:
+        logger.debug("Failed to update entity registry from facts", exc_info=True)
 
 
 def _index_fact_records(anima_dir: Path, records: list[FactRecord], *, origin: str) -> None:
@@ -200,5 +210,18 @@ def _index_fact_records(anima_dir: Path, records: list[FactRecord], *, origin: s
         memory = MemoryManager(anima_dir)
         for path in paths:
             memory._rag.index_file(path, "facts", origin=origin)
+        _sync_entity_collection(anima_dir, memory)
     except Exception:
         logger.debug("Failed to index atomic facts", exc_info=True)
+
+
+def _sync_entity_collection(anima_dir: Path, memory: Any) -> None:
+    try:
+        from core.memory.entity_index import sync_entity_collection
+
+        indexer = memory._rag._get_indexer()
+        vector_store = getattr(indexer, "vector_store", None) if indexer is not None else None
+        if vector_store is not None:
+            sync_entity_collection(anima_dir, vector_store=vector_store)
+    except Exception:
+        logger.debug("Failed to sync entity collection", exc_info=True)

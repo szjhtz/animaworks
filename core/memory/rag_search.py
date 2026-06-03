@@ -360,6 +360,7 @@ class RAGMemorySearch:
                     scope,
                     offset,
                     knowledge_dir,
+                    entity_boost=self._build_entity_boost_config(query),
                 )
             except Exception as e:
                 logger.debug("Vector search failed, falling back to keyword: %s", e)
@@ -399,6 +400,10 @@ class RAGMemorySearch:
             "abstain_on_low_confidence": True,
             "confidence_threshold": 0.35,
             "rrf_confidence_threshold": 0.02,
+            "entity_registry_enabled": True,
+            "entity_boost_enabled": False,
+            "entity_boost": 0.20,
+            "entity_boost_cap": 0.80,
         }
         try:
             from core.config import load_config
@@ -412,11 +417,37 @@ class RAGMemorySearch:
                     "abstain_on_low_confidence": rag.abstain_on_low_confidence,
                     "confidence_threshold": rag.confidence_threshold,
                     "rrf_confidence_threshold": rag.rrf_confidence_threshold,
+                    "entity_registry_enabled": getattr(rag, "entity_registry_enabled", True),
+                    "entity_boost_enabled": getattr(rag, "entity_boost_enabled", False),
+                    "entity_boost": getattr(rag, "entity_boost", 0.20),
+                    "entity_boost_cap": getattr(rag, "entity_boost_cap", 0.80),
                 }
             )
         except Exception:
             logger.debug("Using default RAG pipeline settings", exc_info=True)
         return defaults
+
+    def _build_entity_boost_config(self, query: str, settings: dict[str, object] | None = None):
+        settings = settings or self._load_rag_pipeline_settings()
+        if not bool(settings.get("entity_boost_enabled", False)):
+            return None
+        query_entities: tuple[str, ...] = ()
+        if bool(settings.get("entity_registry_enabled", True)):
+            try:
+                from core.memory.entity_index import match_query_entities
+
+                query_entities = tuple(sorted(match_query_entities(self._anima_dir, query)))
+            except Exception:
+                logger.debug("Failed to match query entities from registry", exc_info=True)
+        from core.memory.retrieval.entity import EntityBoostConfig
+
+        return EntityBoostConfig(
+            enabled=True,
+            boost=float(settings.get("entity_boost", 0.20) or 0.0),
+            max_boost=float(settings.get("entity_boost_cap", 0.80) or 0.0),
+            category=None,
+            query_entities=query_entities,
+        )
 
     def _search_scope_all_hybrid(
         self,
@@ -432,6 +463,7 @@ class RAGMemorySearch:
         from core.memory.retrieval.pipeline import RetrievalPipeline
 
         settings = self._load_rag_pipeline_settings()
+        entity_boost = self._build_entity_boost_config(query, settings)
         pool_k = int(settings["rerank_candidate_pool"])
         limit = 10
 
@@ -475,6 +507,10 @@ class RAGMemorySearch:
         )
         if keyword_hits:
             if not ranked_lists:
+                if entity_boost is not None:
+                    from core.memory.retrieval.entity import apply_entity_boost
+
+                    keyword_hits = apply_entity_boost(query, keyword_hits, entity_boost)
                 self._last_search_meta = {
                     "abstain": False,
                     "abstain_reason": "",
@@ -494,6 +530,7 @@ class RAGMemorySearch:
             abstain_on_low_confidence=bool(settings["abstain_on_low_confidence"]),
             confidence_threshold=float(settings["confidence_threshold"]),
             rrf_confidence_threshold=float(settings["rrf_confidence_threshold"]),
+            entity_boost=entity_boost,
         )
         self._last_search_meta = {
             "abstain": result.abstain,
@@ -558,6 +595,7 @@ class RAGMemorySearch:
         knowledge_dir: Path,
         *,
         result_limit: int | None = None,
+        entity_boost=None,
     ) -> list[dict]:
         """Perform vector search as primary result source."""
         from core.memory.rag.retriever import MemoryRetriever
@@ -627,6 +665,10 @@ class RAGMemorySearch:
                         item[key] = r.metadata[key]
                 all_results.append(item)
 
+        if entity_boost is not None:
+            from core.memory.retrieval.entity import apply_entity_boost
+
+            all_results = apply_entity_boost(query, all_results, entity_boost)
         all_results.sort(key=lambda x: x["score"], reverse=True)
         if result_limit is not None:
             return all_results[:result_limit]
