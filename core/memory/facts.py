@@ -190,6 +190,11 @@ def is_fact_active(record: FactRecord) -> bool:
     return record.is_active()
 
 
+def fact_entity_names(record: FactRecord) -> list[str]:
+    """Return stable unique entity names carried by a fact record."""
+    return _unique_strings([*record.entities, record.source_entity, record.target_entity])
+
+
 def _process_lock(path: Path) -> threading.Lock:
     resolved = path.resolve()
     with _LOCKS_GUARD:

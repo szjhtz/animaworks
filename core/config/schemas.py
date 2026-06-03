@@ -234,6 +234,10 @@ class RAGConfig(BaseModel):
     confidence_threshold: float = 0.35
     rrf_confidence_threshold: float = 0.02
     facts_extraction_enabled: bool = True
+    entity_registry_enabled: bool = True
+    entity_boost_enabled: bool = False
+    entity_boost: float = 0.20
+    entity_boost_cap: float = 0.80
 
 
 class Neo4jConfig(BaseModel):

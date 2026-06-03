@@ -43,10 +43,6 @@ _PATH_PART_TO_MEMORY_TYPE: dict[str, str] = {
     "common_skills": "common_skills",
 }
 
-
-# ── LegacyRAGBackend ──────────────────────────────────────────────────────
-
-
 class LegacyRAGBackend(MemoryBackend):
     """Legacy backend wrapping existing ChromaDB + RAG.
 
@@ -182,7 +178,7 @@ class LegacyRAGBackend(MemoryBackend):
         """Retrieve memories, delegating to retriever or search_memory_text."""
         memory_type = _SCOPE_TO_MEMORY_TYPE.get(scope, "knowledge")
 
-        if scope in ("all", "activity_log", "facts"):
+        if scope in ("all", "activity_log", "facts", "episodes"):
             return await self._retrieve_via_search_text(query, scope, limit, min_score)
 
         retriever = self._ensure_retriever()
@@ -276,6 +272,8 @@ class LegacyRAGBackend(MemoryBackend):
             prefix = f"{self._anima_name}_"
             for coll_name in collections:
                 if not coll_name.startswith(prefix):
+                    continue
+                if coll_name == f"{self._anima_name}_entities":
                     continue
                 try:
                     docs = await asyncio.to_thread(vs.get_by_metadata, coll_name, {}, limit=100_000)
@@ -415,8 +413,6 @@ class LegacyRAGBackend(MemoryBackend):
             logger.debug("get_recent_facts via BM25 failed", exc_info=True)
             return []
 
-    # ── Internal helpers ───────────────────────────────────────────────────
-
     async def _retrieve_via_search_text(
         self,
         query: str,
@@ -437,6 +433,7 @@ class LegacyRAGBackend(MemoryBackend):
                 episodes_dir=self._anima_dir / "episodes",
                 procedures_dir=self._anima_dir / "procedures",
                 common_knowledge_dir=self._common_knowledge_dir,
+                result_limit=limit,
             )
         except Exception:
             logger.warning("search_memory_text failed", exc_info=True)
