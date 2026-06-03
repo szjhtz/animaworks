@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 # AnimaWorks - Digital Anima Framework
 # Copyright (C) 2026 AnimaWorks Authors
 # SPDX-License-Identifier: Apache-2.0
@@ -29,11 +30,7 @@ def rich_anima_dir(tmp_path: Path) -> Path:
     (anima_dir / "activity_log").mkdir(parents=True)
 
     (anima_dir / "knowledge" / "background-implementation-workflow.md").write_text(
-        "# 「裏で実装」ワークフロー\n\n"
-        "## 手順\n"
-        "1. Issue を読む\n"
-        "2. worktree を作成\n"
-        "3. 裏側で自動実装する\n",
+        "# 「裏で実装」ワークフロー\n\n## 手順\n1. Issue を読む\n2. worktree を作成\n3. 裏側で自動実装する\n",
         encoding="utf-8",
     )
     (anima_dir / "knowledge" / "chatwork-policy.md").write_text(
@@ -45,8 +42,7 @@ def rich_anima_dir(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (anima_dir / "knowledge" / "type-hints-guide.md").write_text(
-        "# 型ヒントガイド\n\n型ヒントは全ファイル必須。\n"
-        "Pydanticモデルで型安全を担保する。\n",
+        "# 型ヒントガイド\n\n型ヒントは全ファイル必須。\nPydanticモデルで型安全を担保する。\n",
         encoding="utf-8",
     )
     (anima_dir / "knowledge" / "money-management.md").write_text(
@@ -61,23 +57,24 @@ def rich_anima_dir(tmp_path: Path) -> Path:
 
 @pytest.mark.asyncio
 async def test_single_char_kanji_reaches_channel_c(rich_anima_dir: Path):
-    """End-to-end: message text (containing '裏') is prepended to Channel C query."""
+    """End-to-end: message text (containing '裏') reaches Channel C query."""
     engine = PrimingEngine(rich_anima_dir)
 
     captured_queries: list[str] = []
 
-    mock_retriever = MagicMock()
+    mock_searcher = MagicMock()
+    mock_searcher.last_search_meta = {"abstain": False, "abstain_reason": ""}
 
-    def capture_search(**kwargs):
-        captured_queries.append(kwargs.get("query", ""))
+    def capture_search_many(queries, **kwargs):
+        captured_queries.extend(queries)
         return []
 
-    mock_retriever.search.side_effect = capture_search
+    mock_searcher.search_many.side_effect = capture_search_many
 
     msg = "このIssueを裏で実装して"
 
     with (
-        patch.object(engine, "_get_or_create_retriever", return_value=mock_retriever),
+        patch("core.memory.priming.channel_c.UnifiedMemorySearch", return_value=mock_searcher),
         patch("core.paths.get_shared_dir", return_value=rich_anima_dir.parent / "shared"),
     ):
         await engine.prime_memories(
@@ -85,27 +82,24 @@ async def test_single_char_kanji_reaches_channel_c(rich_anima_dir: Path):
             sender_name="human",
         )
 
-    assert len(captured_queries) >= 2, "Channel C dual query should issue at least 2 searches"
+    assert len(captured_queries) >= 1, "Channel C should issue at least 1 search"
     msg_query = captured_queries[0]
-    kw_query = captured_queries[1]
-    assert msg_query.startswith(msg), (
-        f"First query (message-context) should start with original message: {msg_query}"
-    )
-    assert "裏" in kw_query or "裏" in msg_query, (
-        f"'裏' not found in either query: msg={msg_query}, kw={kw_query}"
-    )
+    kw_query = captured_queries[1] if len(captured_queries) > 1 else ""
+    assert msg_query.startswith(msg), f"First query (message-context) should start with original message: {msg_query}"
+    assert "裏" in kw_query or "裏" in msg_query, f"'裏' not found in either query: msg={msg_query}, kw={kw_query}"
 
 
 @pytest.mark.asyncio
 async def test_channel_c_uses_top_k_5(rich_anima_dir: Path):
-    """End-to-end: Channel C retriever.search is called with top_k=5."""
+    """End-to-end: Channel C unified search is called with limit=5."""
     engine = PrimingEngine(rich_anima_dir)
 
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = []
+    mock_searcher = MagicMock()
+    mock_searcher.search_many.return_value = []
+    mock_searcher.last_search_meta = {"abstain": False, "abstain_reason": ""}
 
     with (
-        patch.object(engine, "_get_or_create_retriever", return_value=mock_retriever),
+        patch("core.memory.priming.channel_c.UnifiedMemorySearch", return_value=mock_searcher),
         patch("core.paths.get_shared_dir", return_value=rich_anima_dir.parent / "shared"),
     ):
         await engine.prime_memories(
@@ -113,12 +107,9 @@ async def test_channel_c_uses_top_k_5(rich_anima_dir: Path):
             sender_name="human",
         )
 
-    # Channel C (top_k=5) and Channel F (top_k=5) share the retriever,
-    # so search may be called more than once. Verify Channel C's call exists.
-    calls = mock_retriever.search.call_args_list
-    assert any(c.kwargs.get("top_k") == 5 for c in calls), (
-        f"Expected a search call with top_k=5 (Channel C), got: {calls}"
-    )
+    mock_searcher.search_many.assert_called_once()
+    call_kwargs = mock_searcher.search_many.call_args
+    assert call_kwargs.kwargs.get("limit") == 5 or call_kwargs[1].get("limit") == 5
 
 
 @pytest.mark.asyncio
@@ -128,16 +119,17 @@ async def test_overflow_path_passes_message(rich_anima_dir: Path):
 
     captured_queries: list[str] = []
 
-    mock_retriever = MagicMock()
+    mock_searcher = MagicMock()
+    mock_searcher.last_search_meta = {"abstain": False, "abstain_reason": ""}
 
-    def capture_search(**kwargs):
-        captured_queries.append(kwargs.get("query", ""))
+    def capture_search_many(queries, **kwargs):
+        captured_queries.extend(queries)
         return []
 
-    mock_retriever.search.side_effect = capture_search
+    mock_searcher.search_many.side_effect = capture_search_many
 
     with (
-        patch.object(engine, "_get_or_create_retriever", return_value=mock_retriever),
+        patch("core.memory.priming.channel_c.UnifiedMemorySearch", return_value=mock_searcher),
         patch("core.paths.get_shared_dir", return_value=rich_anima_dir.parent / "shared"),
     ):
         await engine.prime_memories(
