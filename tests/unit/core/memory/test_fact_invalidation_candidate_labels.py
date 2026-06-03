@@ -28,14 +28,13 @@ def _candidate(record: FactRecord, path: Path, score: float = 0.95) -> FactCandi
 def test_reconcile_only_invalidates_candidates_labeled_contradict(tmp_path: Path) -> None:
     anima_dir = tmp_path / "alice"
     contradictory = FactRecord(text="Alice's LoCoMo score is 70.", recorded_at="2026-06-03T09:00:00+09:00")
-    duplicate = FactRecord(text="Alice's LoCoMo score is 85.", recorded_at="2026-06-03T09:10:00+09:00")
+    duplicate = FactRecord(text="Alice's LoCoMo score is 85.", recorded_at="2026-06-02T09:10:00+09:00")
     unrelated = FactRecord(text="Alice uses rubric A.", recorded_at="2026-06-03T09:20:00+09:00")
     path = _store(anima_dir, contradictory)
-    _store(anima_dir, duplicate)
+    duplicate_path = _store(anima_dir, duplicate)
     _store(anima_dir, unrelated)
     new = FactRecord(
         text="Alice's LoCoMo score is 85.",
-        valid_at="2026-06-03T12:00:00+09:00",
         recorded_at="2026-06-03T12:05:00+09:00",
     )
     labels = {
@@ -57,12 +56,14 @@ def test_reconcile_only_invalidates_candidates_labeled_contradict(tmp_path: Path
     )
 
     stored = {record.fact_id: record for record in read_fact_records(path, include_expired=True)}
+    duplicate_records = read_fact_records(duplicate_path, include_expired=True)
     assert result.action == ReconcileAction.INVALIDATE_OLD
+    assert result.appended_records == ()
     assert {record.fact_id for record in result.updated_records} == {contradictory.fact_id}
-    assert stored[contradictory.fact_id].valid_until == "2026-06-03T12:00:00+09:00"
-    assert stored[duplicate.fact_id].valid_until == ""
+    assert stored[contradictory.fact_id].valid_until == "2026-06-03T12:05:00+09:00"
     assert stored[unrelated.fact_id].valid_until == ""
-    assert new.fact_id in stored
+    assert [record.fact_id for record in duplicate_records] == [duplicate.fact_id]
+    assert new.fact_id not in stored
 
 
 @pytest.mark.unit

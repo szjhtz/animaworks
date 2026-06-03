@@ -149,10 +149,17 @@ def reconcile_new_fact(
         )
 
     contradictions = [candidate for candidate, label in labels_result.labels if label == "CONTRADICT"]
-    if contradictions:
-        return _apply_contradictions(Path(anima_dir), fact, contradictions, effective_time, label="CONTRADICT")
-
     duplicates = [candidate for candidate, label in labels_result.labels if label == "DUPLICATE"]
+    if contradictions:
+        return _apply_contradictions(
+            Path(anima_dir),
+            fact,
+            contradictions,
+            effective_time,
+            label="CONTRADICT",
+            append_fact=not duplicates,
+        )
+
     if duplicates:
         best = max(duplicates, key=lambda candidate: candidate.score)
         return _result(
@@ -273,6 +280,7 @@ def _apply_contradictions(
     invalidation_time: str,
     *,
     label: str,
+    append_fact: bool = True,
 ) -> ReconcileResult:
     candidate_by_id = {candidate.record.fact_id: candidate for candidate in candidates}
 
@@ -288,7 +296,7 @@ def _apply_contradictions(
         stored, updates = update_fact_records_and_append(
             anima_dir,
             {candidate.record.fact_id: make_updater(candidate) for candidate in candidates if candidate.record.fact_id},
-            [fact],
+            [fact] if append_fact else [],
             update_paths=[candidate.path for candidate in candidates],
         )
     except Exception as exc:
