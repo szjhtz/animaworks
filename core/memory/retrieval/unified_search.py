@@ -27,6 +27,7 @@ _TOOL_ALL_SCOPES: tuple[str, ...] = (
     "episodes",
     "knowledge",
     "procedures",
+    "common_knowledge",
     "skills",
     "conversation_summary",
     "activity_log",
@@ -352,7 +353,7 @@ class UnifiedMemorySearch:
     ) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}
         for scope in scopes:
-            keyword_scopes = ("knowledge", "common_knowledge") if scope == "common_knowledge" else (scope,)
+            keyword_scopes = (scope,)
             for keyword_scope in keyword_scopes:
                 self._merge_keyword_scope(
                     rag,
