@@ -328,8 +328,15 @@ def update_fact_record_by_id(
     anima_dir: Path,
     fact_id: str,
     updater: Callable[[FactRecord], FactRecord | None],
+    *,
+    path: Path | None = None,
 ) -> FactRecordUpdate | None:
-    _stored, updates = update_fact_records_and_append(anima_dir, {fact_id: updater}, [])
+    _stored, updates = update_fact_records_and_append(
+        anima_dir,
+        {fact_id: updater},
+        [],
+        update_paths=[path] if path is not None else None,
+    )
     return updates[0] if updates else None
 
 
@@ -337,6 +344,8 @@ def update_fact_records_and_append(
     anima_dir: Path,
     updaters: dict[str, Callable[[FactRecord], FactRecord | None]],
     records_to_append: list[FactRecord],
+    *,
+    update_paths: list[Path] | None = None,
 ) -> tuple[list[FactRecord], list[FactRecordUpdate]]:
     """Apply fact_id updates and append new records under the same file locks."""
     pending = {
@@ -349,7 +358,9 @@ def update_fact_records_and_append(
 
     directory = facts_dir(anima_dir)
     candidate_paths = set(append_by_path)
-    if directory.is_dir():
+    if update_paths is not None:
+        candidate_paths.update(Path(path) for path in update_paths)
+    elif pending and directory.is_dir():
         candidate_paths.update(directory.glob("*.jsonl"))
     if not candidate_paths:
         return [], []

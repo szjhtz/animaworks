@@ -17,9 +17,11 @@ from typing import Any
 from core.memory.fact_invalidation_llm import classify_fact_relation as _classify_fact_relation
 from core.memory.facts import (
     FactRecord,
+    FactRecordUpdate,
     fact_entity_names,
     find_fact_record,
     is_fact_active,
+    read_fact_records,
     update_fact_record_by_id,
     update_fact_records_and_append,
 )
@@ -78,6 +80,13 @@ FactClassifier = Callable[[FactRecord, list[FactCandidate], Path], str]
 FactCandidateSearch = Callable[[Path, FactRecord, int], list[FactCandidate]]
 
 
+@dataclass(frozen=True)
+class CandidateLabelResult:
+    labels: tuple[tuple[FactCandidate, str], ...] = ()
+    error_reason: str = ""
+    error: str = ""
+
+
 def reconcile_new_fact(
     anima_dir: Path,
     fact: FactRecord,
@@ -124,42 +133,42 @@ def reconcile_new_fact(
     if not above_threshold:
         return _result(ReconcileAction.ADD, fact, should_append=True, reason="below_similarity_threshold")
 
-    classify = classifier or _classify_fact_relation
-    try:
-        label = _parse_label(classify(fact, above_threshold, Path(anima_dir)))
-    except Exception as exc:
-        logger.warning("Fact relation classification failed; adding fact", exc_info=True)
+    labels_result = _classify_candidate_labels(
+        fact,
+        above_threshold,
+        Path(anima_dir),
+        classifier or _classify_fact_relation,
+    )
+    if labels_result.error_reason:
         return _result(
             ReconcileAction.ADD,
             fact,
             should_append=True,
-            reason="classifier_failed",
-            error=str(exc),
+            reason=labels_result.error_reason,
+            error=labels_result.error,
         )
 
-    if not label:
-        logger.warning("Fact relation classifier returned invalid label; adding fact")
-        return _result(ReconcileAction.ADD, fact, should_append=True, reason="invalid_label")
+    contradictions = [candidate for candidate, label in labels_result.labels if label == "CONTRADICT"]
+    if contradictions:
+        return _apply_contradictions(Path(anima_dir), fact, contradictions, effective_time, label="CONTRADICT")
 
-    if label == "ADD":
-        return _result(ReconcileAction.ADD, fact, should_append=True, label=label, reason="classified_add")
-    if label == "DUPLICATE":
-        best = max(above_threshold, key=lambda candidate: candidate.score)
+    duplicates = [candidate for candidate, label in labels_result.labels if label == "DUPLICATE"]
+    if duplicates:
+        best = max(duplicates, key=lambda candidate: candidate.score)
         return _result(
             ReconcileAction.SKIP,
             fact,
             should_append=False,
-            label=label,
+            label="DUPLICATE",
             reason="duplicate",
             affected_fact_ids=(best.record.fact_id,),
-            affected_paths=(best.path,),
         )
-    if label == "COMPLEMENT":
-        return _apply_complement(Path(anima_dir), fact, above_threshold, label=label)
-    if label == "CONTRADICT":
-        return _apply_contradictions(Path(anima_dir), fact, above_threshold, effective_time, label=label)
 
-    return _result(ReconcileAction.ADD, fact, should_append=True, reason="unhandled_label")
+    complements = [candidate for candidate, label in labels_result.labels if label == "COMPLEMENT"]
+    if complements:
+        return _apply_complement(Path(anima_dir), fact, complements, label="COMPLEMENT")
+
+    return _result(ReconcileAction.ADD, fact, should_append=True, label="ADD", reason="classified_add")
 
 
 def _load_reconcile_config() -> ReconcileConfig:
@@ -201,7 +210,7 @@ def _search_fact_candidates(anima_dir: Path, fact: FactRecord, top_k: int) -> li
         fact_id = str(metadata.get("fact_id", "") or "").strip()
         if not fact_id or fact_id == fact.fact_id or fact_id in seen:
             continue
-        location = find_fact_record(anima_dir, fact_id)
+        location = _find_fact_record_from_metadata(anima_dir, fact_id, metadata)
         if location is None:
             continue
         seen.add(fact_id)
@@ -214,6 +223,47 @@ def _search_fact_candidates(anima_dir: Path, fact: FactRecord, top_k: int) -> li
             )
         )
     return candidates
+
+
+def _find_fact_record_from_metadata(
+    anima_dir: Path,
+    fact_id: str,
+    metadata: dict[str, Any],
+) -> FactRecordUpdate | None:
+    source_file = str(metadata.get("source_file", "") or "").strip()
+    if source_file:
+        source_path = Path(source_file)
+        path = source_path if source_path.is_absolute() else anima_dir / source_path
+        try:
+            path.resolve().relative_to(anima_dir.resolve())
+        except ValueError:
+            path = None
+        if path is not None and path.is_file():
+            records = read_fact_records(path, include_expired=True)
+            for idx, record in enumerate(records, 1):
+                if record.fact_id == fact_id:
+                    return FactRecordUpdate(path=path, line_no=idx, record=record)
+    return find_fact_record(anima_dir, fact_id)
+
+
+def _classify_candidate_labels(
+    fact: FactRecord,
+    candidates: list[FactCandidate],
+    anima_dir: Path,
+    classify: FactClassifier,
+) -> CandidateLabelResult:
+    labels: list[tuple[FactCandidate, str]] = []
+    for candidate in candidates:
+        try:
+            label = _parse_label(classify(fact, [candidate], anima_dir))
+        except Exception as exc:
+            logger.warning("Fact relation classification failed; adding fact", exc_info=True)
+            return CandidateLabelResult(error_reason="classifier_failed", error=str(exc))
+        if not label:
+            logger.warning("Fact relation classifier returned invalid label; adding fact")
+            return CandidateLabelResult(error_reason="invalid_label")
+        labels.append((candidate, label))
+    return CandidateLabelResult(labels=tuple(labels))
 
 
 def _apply_contradictions(
@@ -239,6 +289,7 @@ def _apply_contradictions(
             anima_dir,
             {candidate.record.fact_id: make_updater(candidate) for candidate in candidates if candidate.record.fact_id},
             [fact],
+            update_paths=[candidate.path for candidate in candidates],
         )
     except Exception as exc:
         logger.warning("Failed to persist fact invalidation; skipping new fact append", exc_info=True)
@@ -292,6 +343,7 @@ def _apply_complement(
             anima_dir,
             best.record.fact_id,
             lambda current: _merge_complement(current, fact),
+            path=best.path,
         )
     except Exception as exc:
         logger.warning("Failed to persist complementary fact update; adding new fact", exc_info=True)
