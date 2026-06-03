@@ -83,7 +83,8 @@ async def test_retrieve_with_invalid_scope(
 async def test_legacy_retrieve_episodes_uses_rag_search_path(
     legacy_backend: LegacyRAGBackend,
 ) -> None:
-    legacy_backend._rag_search.search_memory_text.return_value = [
+    mock_unified = MagicMock()
+    mock_unified.search.return_value = [
         {
             "content": "Caroline recommended Becoming Nicole.",
             "score": 0.9,
@@ -92,12 +93,15 @@ async def test_legacy_retrieve_episodes_uses_rag_search_path(
             "search_method": "vector",
         }
     ]
+    legacy_backend._unified_search = mock_unified
 
     result = await legacy_backend.retrieve("Caroline", scope="episodes", limit=3)
 
     legacy_backend._retriever.search.assert_not_called()
-    legacy_backend._rag_search.search_memory_text.assert_called_once()
-    assert legacy_backend._rag_search.search_memory_text.call_args.kwargs["result_limit"] == 3
+    legacy_backend._rag_search.search_memory_text.assert_not_called()
+    mock_unified.search.assert_called_once()
+    assert mock_unified.search.call_args.kwargs["limit"] == 3
+    assert mock_unified.search.call_args.kwargs["scope"] == "episodes"
     assert result[0].content == "Caroline recommended Becoming Nicole."
     assert result[0].metadata["memory_type"] == "episodes"
 

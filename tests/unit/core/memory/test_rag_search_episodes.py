@@ -219,4 +219,5 @@ class TestSearchMemoryTextEpisodesVector:
                 common_knowledge_dir=common_knowledge_dir,
             )
 
-        mock_vs.assert_called_once()
+        scopes = {call.args[1] for call in mock_vs.call_args_list}
+        assert "episodes" in scopes

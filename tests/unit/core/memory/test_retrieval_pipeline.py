@@ -27,6 +27,23 @@ def test_pipeline_empty_lists_abstains() -> None:
     assert result.items == []
 
 
+def test_pipeline_single_rrf_list_can_pass_default_confidence_gate() -> None:
+    ranked = [[{"content": "hit", "score": 0.8, "source_file": "a.md", "chunk_index": 0}]]
+    pipeline = RetrievalPipeline(reranker=MagicMock())
+
+    result = pipeline.run(
+        "q",
+        ranked,
+        limit=1,
+        rerank_enabled=False,
+        abstain_on_low_confidence=True,
+        rrf_confidence_threshold=0.02,
+    )
+
+    assert result.abstain is False
+    assert result.items[0]["content"] == "hit"
+
+
 def test_pipeline_uses_reranker_when_enabled() -> None:
     reranker = MagicMock()
     reranker.rerank_sync.return_value = [

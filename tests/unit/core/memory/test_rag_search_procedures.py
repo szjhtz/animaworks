@@ -120,7 +120,7 @@ class TestSearchMemoryTextProceduresWithVector:
         procedures_dir: Path,
         common_knowledge_dir: Path,
     ) -> None:
-        """scope='procedures' triggers vector search when indexer is available."""
+        """scope='procedures' combines vector and keyword candidates under unified search."""
         (procedures_dir / "deploy.md").write_text(
             "Deploy to production server", encoding="utf-8",
         )
@@ -141,7 +141,8 @@ class TestSearchMemoryTextProceduresWithVector:
                 common_knowledge_dir=common_knowledge_dir,
             )
 
-            assert results == []
+            assert results[0]["source_file"] == "procedures/deploy.md"
+            assert results[0]["search_method"] == "keyword_fallback"
             mock_vector.assert_called_once()
 
     def test_keyword_fallback_when_vector_unavailable(
