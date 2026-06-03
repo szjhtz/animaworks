@@ -281,7 +281,7 @@ class UnifiedMemorySearch:
         ranked_lists: list[list[dict[str, Any]]] = []
         vector_scopes = [scope for scope in scopes if scope != "activity_log"]
         for vector_scope in vector_scopes:
-            hits = self._vector_hits(rag, query, vector_scope, pool_k)
+            hits = self._vector_hits(rag, query, vector_scope, pool_k, entity_boost=entity_boost)
             if hits:
                 ranked_lists.append(hits)
 
@@ -308,7 +308,15 @@ class UnifiedMemorySearch:
             ranked_lists.append(keyword_hits)
         return ranked_lists
 
-    def _vector_hits(self, rag: Any, query: str, scope: str, pool_k: int) -> list[dict[str, Any]]:
+    def _vector_hits(
+        self,
+        rag: Any,
+        query: str,
+        scope: str,
+        pool_k: int,
+        *,
+        entity_boost: Any | None,
+    ) -> list[dict[str, Any]]:
         try:
             return rag._vector_search_primary(
                 query,
@@ -316,6 +324,7 @@ class UnifiedMemorySearch:
                 offset=0,
                 knowledge_dir=self._anima_dir / "knowledge",
                 result_limit=pool_k,
+                entity_boost=entity_boost,
             )
         except Exception:
             logger.debug("Unified vector search failed for scope=%s", scope, exc_info=True)

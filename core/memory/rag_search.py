@@ -318,11 +318,10 @@ class RAGMemorySearch:
         common_knowledge_dir: Path,
         result_limit: int | None = None,
     ) -> list[dict]:
-        """Search memory by vector similarity with keyword fallback.
+        """Search memory through the unified Legacy retrieval policy.
 
-        Returns ranked results as dicts with score, content, and metadata.
-        Vector search is primary; keyword OR search is fallback only
-        (activated when ChromaDB is unavailable).
+        Returns ranked results as dicts with score, content, and metadata while
+        preserving the legacy tool result shape.
         """
         offset = max(0, min(offset, 50))
         self._last_search_meta = {}

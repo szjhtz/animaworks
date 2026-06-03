@@ -101,6 +101,8 @@ class RetrievalPipeline:
 
         if abstain_on_low_confidence:
             threshold = confidence_threshold if used_rerank else rrf_confidence_threshold
+            if not used_rerank:
+                threshold = min(threshold, len(non_empty) / float(rrf_k + 1))
             gated = apply_confidence_gate(candidates, threshold=threshold)
             return PipelineResult(
                 items=gated.candidates[:limit],
