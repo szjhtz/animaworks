@@ -215,7 +215,7 @@ def _search_fact_candidates(anima_dir: Path, fact: FactRecord, top_k: int) -> li
     for result in results:
         metadata = result.document.metadata or {}
         fact_id = str(metadata.get("fact_id", "") or "").strip()
-        if not fact_id or fact_id == fact.fact_id or fact_id in seen:
+        if not fact_id or fact_id in seen:
             continue
         location = _find_fact_record_from_metadata(anima_dir, fact_id, metadata)
         if location is None:
@@ -261,6 +261,9 @@ def _classify_candidate_labels(
 ) -> CandidateLabelResult:
     labels: list[tuple[FactCandidate, str]] = []
     for candidate in candidates:
+        if candidate.record.fact_id == fact.fact_id or candidate.record.dedup_key == fact.dedup_key:
+            labels.append((candidate, "DUPLICATE"))
+            continue
         try:
             label = _parse_label(classify(fact, [candidate], anima_dir))
         except Exception as exc:
