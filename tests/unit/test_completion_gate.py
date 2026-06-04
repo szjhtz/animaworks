@@ -358,7 +358,7 @@ class TestCompletionGateTool:
         raw = h.handle(
             "completion_gate",
             {
-                "applied_skill_refs": ["../bad", "skills/missing/SKILL.md"],
+                "applied_skill_refs": ["../bad", "skills//missing/SKILL.md"],
                 "skill_creation": {"status": "created", "created_skill_refs": []},
             },
         )
