@@ -904,6 +904,86 @@ class TestStreamingExecution:
         mock_client.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_cli_exec_streaming_fallback_parses_jsonl_success(self, executor):
+        class _FakeStdin:
+            def __init__(self):
+                self.written = b""
+                self.closed = False
+
+            def write(self, data):
+                self.written += data
+
+            async def drain(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class _FakeStdout:
+            def __init__(self):
+                self.lines = [
+                    b'{"type":"thread.started","thread_id":"thread-cli"}\n',
+                    b'{"type":"item.started","item":{"type":"command_execution","id":"cmd-1","command":"pytest"}}\n',
+                    b'{"type":"item.completed","item":{"type":"command_execution","id":"cmd-1","command":"pytest","aggregated_output":"1 passed","exit_code":0}}\n',
+                    b'{"type":"item.completed","item":{"type":"agent_message","id":"msg-1","text":"CLI response"}}\n',
+                    b'{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":5}}\n',
+                    b"",
+                ]
+
+            async def readline(self):
+                return self.lines.pop(0)
+
+        class _FakeStderr:
+            async def read(self, _size):
+                return b""
+
+        class _FakeProc:
+            def __init__(self):
+                self.stdin = _FakeStdin()
+                self.stdout = _FakeStdout()
+                self.stderr = _FakeStderr()
+                self.returncode = None
+                self.kill_calls = 0
+
+            async def wait(self):
+                self.returncode = 0
+                return 0
+
+            def kill(self):
+                self.kill_calls += 1
+                self.returncode = 1
+
+        proc = _FakeProc()
+        tracker = ContextTracker(model="codex/o4-mini")
+
+        with (
+            patch.object(executor, "_write_codex_config"),
+            patch.object(executor, "_build_cli_exec_command", return_value=["codex", "exec", "--json", "-"]),
+            patch.object(executor, "_build_env", return_value={}),
+            patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+        ):
+            events = [
+                ev
+                async for ev in executor._execute_streaming_via_cli_exec(
+                    system_prompt="sys",
+                    prompt="hello",
+                    tracker=tracker,
+                )
+            ]
+
+        assert proc.stdin.written == b"hello"
+        assert proc.stdin.closed
+        assert proc.kill_calls == 0
+        assert [e["type"] for e in events if e["type"].startswith("tool_")] == ["tool_start", "tool_end"]
+        assert [e["text"] for e in events if e["type"] == "text_delta"] == ["CLI response"]
+        done = next(e for e in events if e["type"] == "done")
+        assert done["full_text"] == "CLI response"
+        assert done["usage"]["input_tokens"] == 11
+        assert done["usage"]["output_tokens"] == 5
+        assert done["result_message"].session_id == "thread-cli"
+        assert len(done["tool_call_records"]) == 1
+
+    @pytest.mark.asyncio
     async def test_stream_inbox_trigger_clears_stale_thread_and_does_not_persist(self, executor, anima_dir):
         msg_item = MagicMock(spec=["type", "id", "text"])
         msg_item.type = "agent_message"
