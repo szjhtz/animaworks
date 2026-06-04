@@ -106,7 +106,7 @@ def record_completion_gate_usage(anima_dir: Path, args: dict[str, Any]) -> Compl
     """Validate completion_gate refs and append usage events for valid refs."""
     result = CompletionGateUsageResult()
     tracker = SkillUsageTracker(anima_dir)
-    seen: set[tuple[str, str, bool]] = set()
+    seen: set[tuple[str, str]] = set()
 
     for ref in _ref_list(args.get("applied_skill_refs")):
         resolved = _resolve_skill_ref(anima_dir, ref)
@@ -114,7 +114,7 @@ def record_completion_gate_usage(anima_dir: Path, args: dict[str, Any]) -> Compl
             result.warnings.append(f"{ref}: {resolved}")
             continue
         skill_name, is_common, canonical_ref = resolved
-        key = ("skill", skill_name, is_common)
+        key = ("skill", canonical_ref)
         if key in seen:
             continue
         seen.add(key)
@@ -133,7 +133,7 @@ def record_completion_gate_usage(anima_dir: Path, args: dict[str, Any]) -> Compl
             result.warnings.append(f"{ref}: {resolved_proc}")
             continue
         proc_name, _proc_path = resolved_proc
-        key = ("procedure", proc_name, False)
+        key = ("procedure", ref)
         if key in seen:
             continue
         seen.add(key)

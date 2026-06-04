@@ -361,6 +361,37 @@ class TestCompletionGateTool:
         assert stats["common_skills/community/common-review/SKILL.md"].use_count == 1
         assert stats["common_skills/community/common-review/SKILL.md"].is_common is True
 
+    def test_completion_gate_records_nested_common_same_name_as_distinct_refs(
+        self,
+        anima_dir: Path,
+        memory: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        data_dir = anima_dir.parents[1]
+        monkeypatch.setenv("ANIMAWORKS_DATA_DIR", str(data_dir))
+        common_dir = data_dir / "common_skills"
+        for group in ("team-a", "team-b"):
+            skill_dir = common_dir / group / "review"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("---\nname: review\n---\n\n# Review\n", encoding="utf-8")
+
+        h = ToolHandler(anima_dir=anima_dir, memory=memory, tool_registry=[])
+        h.handle(
+            "completion_gate",
+            {
+                "applied_skill_refs": [
+                    "common_skills/team-a/review/SKILL.md",
+                    "common_skills/team-b/review/SKILL.md",
+                ]
+            },
+        )
+
+        tracker = SkillUsageTracker(anima_dir)
+        stats = tracker.get_all_stats()
+        assert stats["common_skills/team-a/review/SKILL.md"].use_count == 1
+        assert stats["common_skills/team-b/review/SKILL.md"].use_count == 1
+        assert tracker.get_stats("review").use_count == 2
+
     def test_completion_gate_deduplicates_refs(self, anima_dir: Path, memory: MagicMock):
         skill_dir = anima_dir / "skills" / "same"
         skill_dir.mkdir(parents=True)
