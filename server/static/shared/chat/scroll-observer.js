@@ -18,7 +18,14 @@ export function createScrollObserver(config) {
   let armed = true;
   let lastScrollTop = 0;
   let removeScrollHandler = null;
+  let removeIntentHandlers = null;
+  let wheelGestureConsumed = false;
+  let wheelGestureTimer = null;
+  let touchStartY = null;
+  let touchGestureConsumed = false;
   const LOAD_ROOT_MARGIN_TOP = 200;
+  const WHEEL_GESTURE_RESET_MS = 400;
+  const TOUCH_LOAD_THRESHOLD_PX = 24;
 
   function _schedule(fn) {
     if (typeof requestAnimationFrame === "function") {
@@ -40,7 +47,7 @@ export function createScrollObserver(config) {
   }
 
   function _loadFromSentinel(sentinel) {
-    if (!armed || loading) return;
+    if (!armed || loading) return false;
 
     armed = false;
     loading = true;
@@ -58,6 +65,13 @@ export function createScrollObserver(config) {
         lastScrollTop = container?.scrollTop || 0;
         _schedule(_observeSentinel);
       });
+    return true;
+  }
+
+  function _requestIntentLoad() {
+    if (!observedSentinel || !_isSentinelInLoadRange(observedSentinel)) return false;
+    armed = true;
+    return _loadFromSentinel(observedSentinel);
   }
 
   function _bindScrollHandler() {
@@ -80,6 +94,60 @@ export function createScrollObserver(config) {
     removeScrollHandler = () => {
       container.removeEventListener("scroll", handleScroll);
       removeScrollHandler = null;
+    };
+  }
+
+  function _bindIntentHandlers() {
+    if (!container || typeof container.addEventListener !== "function") return;
+    if (removeIntentHandlers) removeIntentHandlers();
+
+    const resetWheelGesture = () => {
+      if (wheelGestureTimer) clearTimeout(wheelGestureTimer);
+      wheelGestureTimer = setTimeout(() => {
+        wheelGestureConsumed = false;
+        wheelGestureTimer = null;
+      }, WHEEL_GESTURE_RESET_MS);
+    };
+
+    const handleWheel = (event) => {
+      if (!event || event.deltaY >= 0) return;
+      resetWheelGesture();
+      if (wheelGestureConsumed) return;
+      wheelGestureConsumed = true;
+      _requestIntentLoad();
+    };
+
+    const handleTouchStart = (event) => {
+      touchStartY = event?.touches?.[0]?.clientY ?? null;
+      touchGestureConsumed = false;
+    };
+
+    const handleTouchMove = (event) => {
+      const currentY = event?.touches?.[0]?.clientY ?? null;
+      if (touchStartY == null || currentY == null) return;
+      if (currentY - touchStartY < TOUCH_LOAD_THRESHOLD_PX) return;
+      if (touchGestureConsumed) return;
+      touchGestureConsumed = true;
+      _requestIntentLoad();
+    };
+
+    const handleTouchEnd = () => {
+      touchStartY = null;
+      touchGestureConsumed = false;
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: true });
+    container.addEventListener("touchstart", handleTouchStart, { passive: true });
+    container.addEventListener("touchmove", handleTouchMove, { passive: true });
+    container.addEventListener("touchend", handleTouchEnd, { passive: true });
+    container.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    removeIntentHandlers = () => {
+      container.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("touchstart", handleTouchStart);
+      container.removeEventListener("touchmove", handleTouchMove);
+      container.removeEventListener("touchend", handleTouchEnd);
+      container.removeEventListener("touchcancel", handleTouchEnd);
+      removeIntentHandlers = null;
     };
   }
 
@@ -107,6 +175,7 @@ export function createScrollObserver(config) {
       { root: container, rootMargin: `${LOAD_ROOT_MARGIN_TOP}px 0px 0px 0px` },
     );
     _bindScrollHandler();
+    _bindIntentHandlers();
   }
 
   function observe() {
@@ -133,10 +202,16 @@ export function createScrollObserver(config) {
       observer = null;
     }
     if (removeScrollHandler) removeScrollHandler();
+    if (removeIntentHandlers) removeIntentHandlers();
+    if (wheelGestureTimer) clearTimeout(wheelGestureTimer);
     observedSentinel = null;
     loading = false;
     armed = true;
     lastScrollTop = 0;
+    wheelGestureConsumed = false;
+    wheelGestureTimer = null;
+    touchStartY = null;
+    touchGestureConsumed = false;
   }
 
   function refresh() {

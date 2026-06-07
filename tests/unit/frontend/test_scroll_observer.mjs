@@ -59,6 +59,18 @@ function createScrollableContainer(sentinel) {
     dispatchScroll() {
       listeners.get("scroll")?.();
     },
+    dispatchWheel(deltaY) {
+      listeners.get("wheel")?.({ deltaY });
+    },
+    dispatchTouchStart(clientY) {
+      listeners.get("touchstart")?.({ touches: [{ clientY }] });
+    },
+    dispatchTouchMove(clientY) {
+      listeners.get("touchmove")?.({ touches: [{ clientY }] });
+    },
+    dispatchTouchEnd() {
+      listeners.get("touchend")?.();
+    },
   };
   return container;
 }
@@ -155,6 +167,77 @@ describe("createScrollObserver", () => {
 
     container.scrollTop = 80;
     container.dispatchScroll();
+    await flushTimers();
+    await flushTimers();
+    assert.equal(calls, 2);
+  });
+
+  it("loads on upward wheel intent when content cannot scroll", async () => {
+    const sentinel = {
+      id: "sentinel",
+      getBoundingClientRect: () => ({ top: 8, bottom: 9 }),
+    };
+    const container = createScrollableContainer(sentinel);
+    container.scrollTop = 0;
+    let calls = 0;
+
+    const scrollObserver = createScrollObserver({
+      container,
+      onLoadMore: async () => {
+        calls += 1;
+      },
+    });
+
+    scrollObserver.observe();
+    lastObserver.trigger(sentinel, true);
+    await flushTimers();
+    await flushTimers();
+    assert.equal(calls, 1);
+
+    container.dispatchWheel(-80);
+    await flushTimers();
+    await flushTimers();
+    assert.equal(calls, 2);
+
+    container.dispatchWheel(-80);
+    await flushTimers();
+    assert.equal(calls, 2);
+  });
+
+  it("loads on downward touch drag intent when content cannot scroll", async () => {
+    const sentinel = {
+      id: "sentinel",
+      getBoundingClientRect: () => ({ top: 8, bottom: 9 }),
+    };
+    const container = createScrollableContainer(sentinel);
+    container.scrollTop = 0;
+    let calls = 0;
+
+    const scrollObserver = createScrollObserver({
+      container,
+      onLoadMore: async () => {
+        calls += 1;
+      },
+    });
+
+    scrollObserver.observe();
+    container.dispatchTouchStart(20);
+    container.dispatchTouchMove(32);
+    await flushTimers();
+    assert.equal(calls, 0);
+
+    container.dispatchTouchMove(58);
+    await flushTimers();
+    await flushTimers();
+    assert.equal(calls, 1);
+
+    container.dispatchTouchMove(100);
+    await flushTimers();
+    assert.equal(calls, 1);
+
+    container.dispatchTouchEnd();
+    container.dispatchTouchStart(20);
+    container.dispatchTouchMove(58);
     await flushTimers();
     await flushTimers();
     assert.equal(calls, 2);
