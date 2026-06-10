@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from core.memory.fact_observability import warn_rate_limited
@@ -672,6 +673,11 @@ class RAGMemorySearch:
                 "access_count",
                 "last_accessed_at",
                 "anima",
+                "created_at",
+                "updated_at",
+                "recorded_at",
+                "origin",
+                "confidence",
             ):
                 if key in meta:
                     item[key] = meta[key]
@@ -759,6 +765,11 @@ class RAGMemorySearch:
                     "access_count",
                     "last_accessed_at",
                     "anima",
+                    "created_at",
+                    "updated_at",
+                    "recorded_at",
+                    "origin",
+                    "confidence",
                 ):
                     if key in r.metadata:
                         item[key] = r.metadata[key]
@@ -831,6 +842,7 @@ class RAGMemorySearch:
                         "total_chunks": 1,
                         "memory_type": memory_type,
                         "search_method": "keyword_fallback",
+                        **self._keyword_file_metadata(f, memory_type),
                     }
 
         if scope in ("facts", "all"):
@@ -964,14 +976,39 @@ class RAGMemorySearch:
                         "valid_at_iso": record.valid_at,
                         "event_time_iso": record.valid_at,
                         "valid_until": record.valid_until,
+                        "recorded_at": record.recorded_at,
                         "source_episode": record.source_episode,
                         "source_session_id": record.source_session_id,
                         "entities": list(record.entities),
+                        "confidence": record.confidence,
                     }
                 )
 
         results.sort(key=lambda x: x["score"], reverse=True)
         return results
+
+    @staticmethod
+    def _keyword_file_metadata(path: Path, memory_type: str) -> dict[str, str]:
+        metadata: dict[str, str] = {}
+        try:
+            metadata["updated_at"] = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
+        except OSError:
+            return metadata
+        if memory_type not in {"knowledge", "common_knowledge"}:
+            return metadata
+        try:
+            from core.memory.frontmatter import parse_frontmatter
+
+            meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("Failed to inspect knowledge metadata for keyword search: %s", path, exc_info=True)
+            return metadata
+        for key in ("updated_at", "origin"):
+            raw_value = meta.get(key, "")
+            value = raw_value.isoformat() if hasattr(raw_value, "isoformat") else str(raw_value or "").strip()
+            if value:
+                metadata[key] = value
+        return metadata
 
     def search_knowledge(self, query: str, knowledge_dir: Path) -> list[tuple[str, str]]:
         """Search knowledge/ by keyword (OR-split on whitespace tokens)."""

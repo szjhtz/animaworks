@@ -25,6 +25,7 @@ from core.memory.scope_policy import (
     neo4j_scope_for,
     title_for_legacy_scope,
 )
+from core.memory.search_metadata import format_result_metadata_line
 from core.tooling.handler_base import (
     _error_result,
     _extract_first_heading,
@@ -510,11 +511,15 @@ class MemoryToolsMixin:
             chunk_idx = r.get("chunk_index", 0)
             total_chunks = r.get("total_chunks", 1)
             content = r.get("content", "")
+            metadata_line = format_result_metadata_line(r)
 
             entry_header = (
                 f"[{offset + shown_count + 1}] score={score:.2f} | {source} | chunk {chunk_idx + 1}/{total_chunks}"
             )
-            entry = f"\n{entry_header}\n{content}\n"
+            if metadata_line:
+                entry = f"\n{entry_header}\n{metadata_line}\n{content}\n"
+            else:
+                entry = f"\n{entry_header}\n{content}\n"
 
             entry_tokens = len(entry) // 4
             entry_lines = entry.count("\n") + 1
