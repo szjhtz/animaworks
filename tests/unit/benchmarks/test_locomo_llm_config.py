@@ -9,6 +9,7 @@ from benchmarks.locomo.llm_config import (
     default_answer_model,
     default_baseline_path,
     default_llm_credential,
+    resolve_locomo_judge_litellm_kwargs,
     resolve_locomo_litellm_kwargs,
 )
 
@@ -81,6 +82,25 @@ class TestLoCoMoLlmConfig:
 
         assert model == "openai/deepseek-v4-flash"
         assert kwargs["api_base"] == "http://localhost:4000/v1"
+
+    def test_resolve_judge_proxy_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_BASE", "http://proxy.example/v1")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        model, kwargs = resolve_locomo_judge_litellm_kwargs("deepseek-chat")
+
+        assert model == "openai/deepseek-chat"
+        assert kwargs["api_base"] == "http://proxy.example/v1"
+        assert kwargs["api_key"] == "test-key"
+
+    def test_resolve_judge_preserves_standard_openai_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+        model, kwargs = resolve_locomo_judge_litellm_kwargs("gpt-4o")
+
+        assert model == "gpt-4o"
+        assert kwargs == {}
 
     def test_default_baseline_deepseek(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LOCOMO_BASELINE", raising=False)

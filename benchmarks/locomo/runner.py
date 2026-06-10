@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.locomo.adapter import SEARCH_MODES, AnimaWorksLoCoMoAdapter, load_dataset
-from benchmarks.locomo.llm_config import default_answer_model
+from benchmarks.locomo.llm_config import default_answer_model, resolve_locomo_judge_litellm_kwargs
 from benchmarks.locomo.metrics import CATEGORY_NAMES, compute_summary, eval_by_category, llm_judge_sync
 from benchmarks.locomo.protocol import (
     PROTOCOL_VERSION,
@@ -238,6 +238,17 @@ def _run_qa_loop(
     errors = 0
     litellm_warned = False
     max_questions = int(getattr(args, "max_questions", 0) or 0)
+    judge_model = str(getattr(args, "judge_model", "gpt-4o") or "gpt-4o")
+    judge_completion_kwargs: dict[str, Any] = {}
+    if bool(getattr(args, "judge", False)):
+        try:
+            judge_model, judge_completion_kwargs = resolve_locomo_judge_litellm_kwargs(judge_model)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not resolve judge model %s; using LiteLLM defaults: %s", judge_model, exc)
+            judge_completion_kwargs = {}
+        judge_timeout = getattr(args, "answer_timeout", None)
+        if judge_timeout is not None:
+            judge_completion_kwargs = {**judge_completion_kwargs, "timeout": float(judge_timeout)}
 
     def _warn_litellm(exc: Exception) -> None:
         nonlocal litellm_warned
@@ -363,7 +374,8 @@ def _run_qa_loop(
                             question,
                             answer,
                             prediction,
-                            model=str(args.judge_model),
+                            model=judge_model,
+                            completion_kwargs=judge_completion_kwargs,
                         )
                         if judge_result.get("verdict") == "error":
                             raise RuntimeError("llm_judge returned verdict=error")

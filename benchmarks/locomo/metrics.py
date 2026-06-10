@@ -7,6 +7,7 @@ import logging
 import re
 import string
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 try:
@@ -190,6 +191,7 @@ async def llm_judge(
     prediction: str,
     *,
     model: str = "gpt-4o",
+    completion_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """LLM-based answer quality judgment via LiteLLM.
 
@@ -198,6 +200,7 @@ async def llm_judge(
         reference: Gold reference answer.
         prediction: System answer to score.
         model: LiteLLM model id.
+        completion_kwargs: Optional provider kwargs forwarded to LiteLLM.
 
     Returns:
         ``{"verdict": str, "score": float}``. On total API failure, verdict
@@ -211,12 +214,14 @@ async def llm_judge(
     import litellm  # noqa: PLC0415
 
     last_err: Exception | None = None
+    call_kwargs = _judge_completion_kwargs(completion_kwargs)
     for attempt in range(1, _JUDGE_RETRIES + 1):
         try:
             resp = await litellm.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
+                **call_kwargs,
             )
             content = (resp.choices[0].message.content or "").strip()
             verdict, score = _parse_judge_verdict(content)
@@ -242,6 +247,7 @@ def llm_judge_sync(
     prediction: str,
     *,
     model: str = "gpt-4o",
+    completion_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous wrapper for :func:`llm_judge`; avoids per-call asyncio.run overhead.
 
@@ -255,12 +261,14 @@ def llm_judge_sync(
         prediction=prediction,
     )
     last_err: Exception | None = None
+    call_kwargs = _judge_completion_kwargs(completion_kwargs)
     for attempt in range(1, _JUDGE_RETRIES + 1):
         try:
             resp = _litellm.completion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
+                **call_kwargs,
             )
             content = (resp.choices[0].message.content or "").strip()
             verdict, score = _parse_judge_verdict(content)
@@ -275,6 +283,12 @@ def llm_judge_sync(
     if last_err is not None:
         logger.error("llm_judge_sync failed after %s attempts: %s", _JUDGE_RETRIES, last_err)
     return {"verdict": "error", "score": 0.0}
+
+
+def _judge_completion_kwargs(completion_kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
+    kwargs = dict(completion_kwargs or {})
+    kwargs.setdefault("max_tokens", 16)
+    return kwargs
 
 
 # ── Summary aggregation ──────────

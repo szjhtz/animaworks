@@ -337,13 +337,15 @@ class TestRunnerWithMockedAdapter:
         mock_adapter.ingest_conversation.return_value = 3
         mock_adapter.retrieve.return_value = [{"content": "Paris trip", "score": 0.9, "metadata": {}}]
         mock_adapter.answer.return_value = "Paris"
+        judge_mock = MagicMock(return_value={"verdict": "correct", "score": 1.0})
 
         with (
             patch("benchmarks.locomo.runner.AnimaWorksLoCoMoAdapter", return_value=mock_adapter),
             patch(
-                "benchmarks.locomo.runner.llm_judge_sync",
-                return_value={"verdict": "correct", "score": 1.0},
+                "benchmarks.locomo.runner.resolve_locomo_judge_litellm_kwargs",
+                return_value=("openai/deepseek-chat", {"api_base": "http://proxy.example/v1", "api_key": "dummy"}),
             ),
+            patch("benchmarks.locomo.runner.llm_judge_sync", judge_mock),
         ):
             from benchmarks.locomo.runner import run_benchmark
 
@@ -354,8 +356,9 @@ class TestRunnerWithMockedAdapter:
                 conversations=1,
                 top_k=5,
                 judge=True,
-                judge_model="gpt-4o",
+                judge_model="deepseek-chat",
                 answer_model="gpt-4o-mini",
+                answer_timeout=42,
                 verbose=False,
             )
             results, errors = run_benchmark(args)
@@ -363,6 +366,12 @@ class TestRunnerWithMockedAdapter:
         assert "vector" in results
         judge_scores = [r["judge_score"] for r in results["vector"]["results"] if r["judge_score"] is not None]
         assert len(judge_scores) > 0
+        assert judge_mock.call_args.kwargs["model"] == "openai/deepseek-chat"
+        assert judge_mock.call_args.kwargs["completion_kwargs"] == {
+            "api_base": "http://proxy.example/v1",
+            "api_key": "dummy",
+            "timeout": 42.0,
+        }
 
     def test_judge_verdict_error_counts_as_error_without_zeroing_f1(self, tmp_path):
         import argparse
@@ -499,6 +508,28 @@ class TestLlmJudgeSync:
             result = llm_judge_sync("Q", "ref", "pred", model="test")
             assert result["verdict"] == "correct"
             assert result["score"] == 1.0
+
+    def test_forwards_completion_kwargs(self):
+        from benchmarks.locomo.metrics import llm_judge_sync
+
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "CORRECT"
+
+        with patch("litellm.completion", return_value=mock_resp) as completion:
+            result = llm_judge_sync(
+                "Q",
+                "ref",
+                "pred",
+                model="openai/deepseek-chat",
+                completion_kwargs={"api_base": "http://proxy.example/v1", "api_key": "dummy", "timeout": 30},
+            )
+
+        assert result["verdict"] == "correct"
+        assert completion.call_args.kwargs["api_base"] == "http://proxy.example/v1"
+        assert completion.call_args.kwargs["api_key"] == "dummy"
+        assert completion.call_args.kwargs["timeout"] == 30
+        assert completion.call_args.kwargs["max_tokens"] == 16
 
     def test_incorrect_verdict(self):
         from benchmarks.locomo.metrics import llm_judge_sync

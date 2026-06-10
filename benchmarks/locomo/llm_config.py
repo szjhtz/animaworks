@@ -98,6 +98,22 @@ def resolve_locomo_litellm_kwargs(model: str) -> tuple[str, dict[str, Any]]:
     return litellm_model, kwargs
 
 
+def resolve_locomo_judge_litellm_kwargs(model: str) -> tuple[str, dict[str, Any]]:
+    """Resolve judge models that need the LoCoMo OpenAI-compatible proxy.
+
+    Standard OpenAI judge models such as ``gpt-4o`` are intentionally left as-is
+    so they can use normal LiteLLM/OpenAI environment configuration. Local proxy
+    models like DeepSeek and Qwen need the same explicit ``api_base`` routing as
+    answer generation.
+    """
+    model_id = str(model or "").strip()
+    lower = model_id.lower()
+    proxy_markers = ("deepseek", "qwen", "mlx-community")
+    if any(marker in lower for marker in proxy_markers):
+        return resolve_locomo_litellm_kwargs(model_id)
+    return model_id, {}
+
+
 def llm_routing_configured(model: str | None = None) -> bool:
     """Return True when answer LLM routing can be resolved."""
     if os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL"):
