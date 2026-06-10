@@ -8,6 +8,7 @@ import pytest
 
 from core.memory import fact_extraction
 from core.memory.fact_extraction import (
+    DEFAULT_FACT_CONFIDENCE,
     _resolve_extraction_config,
     extract_and_store_facts,
     extract_and_store_facts_with_outcome,
@@ -71,6 +72,7 @@ def test_records_from_extraction_maps_entities_and_source() -> None:
     assert records[0].source_session_id == "session-1"
     assert records[0].entities == ["Alice", "LoCoMo"]
     assert records[0].edge_type == "EVALUATES"
+    assert records[0].confidence == DEFAULT_FACT_CONFIDENCE
 
 
 @pytest.mark.unit

@@ -21,6 +21,8 @@ from core.time_utils import now_iso
 
 logger = logging.getLogger("animaworks.memory.fact_extraction")
 
+DEFAULT_FACT_CONFIDENCE = 0.85
+
 
 @dataclass(frozen=True)
 class FactExtractionOutcome:
@@ -89,7 +91,8 @@ def records_from_extraction(
     source_episode: str,
     source_session_id: str = "",
     recorded_at: str | None = None,
-    confidence: float = 0.85,
+    # Fixed provenance marker only; not calibrated and not used for ranking.
+    confidence: float = DEFAULT_FACT_CONFIDENCE,
 ) -> list[FactRecord]:
     entity_names = [entity.name for entity in entities if entity.name.strip()]
     out: list[FactRecord] = []
