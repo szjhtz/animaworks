@@ -184,6 +184,15 @@ class MemoryToolsMixin:
     _min_trust_seen: int
     _read_paths: set[str]
 
+    _USED_COLLECTION_PREFIXES: dict[str, str] = {
+        "knowledge/": "{anima}_knowledge",
+        "episodes/": "{anima}_episodes",
+        "procedures/": "{anima}_procedures",
+        "skills/": "{anima}_skills",
+        "common_knowledge/": "shared_common_knowledge",
+        "common_skills/": "shared_common_skills",
+    }
+
     # ── Neo4j backend integration ──────────────────────────────────────────
 
     _NEO4J_SCOPE_MAP: dict[str, str] = NEO4J_SCOPE_MAP
@@ -212,6 +221,56 @@ class MemoryToolsMixin:
         from core.memory.backend.registry import get_backend
 
         return get_backend("neo4j", Path(self._anima_dir))
+
+    def _record_memory_file_used(self, rel: str) -> None:
+        """Best-effort explicit-use accounting for indexed memory files."""
+        collection = self._collection_for_memory_file(rel)
+        if collection is None:
+            return
+        try:
+            indexer = self._memory._get_indexer()
+            if indexer is None:
+                return
+            vector_store = indexer.vector_store
+            hits = vector_store.get_by_metadata(collection, {"source_file": rel}, limit=10_000)
+            if not hits:
+                return
+
+            from core.memory.rag.retriever import MemoryRetriever, RetrievalResult
+
+            rag_results = [
+                RetrievalResult(
+                    doc_id=hit.document.id,
+                    content=hit.document.content,
+                    score=hit.score,
+                    metadata=dict(hit.document.metadata),
+                    source_scores={},
+                )
+                for hit in hits
+            ]
+            retriever = MemoryRetriever(vector_store, indexer, self._anima_dir / "knowledge")
+            retriever.record_access(rag_results, self._current_anima_name(), kind="used")
+        except Exception:
+            logger.debug("Failed to record explicit memory use for %s", rel, exc_info=True)
+
+    def _collection_for_memory_file(self, rel: str) -> str | None:
+        for prefix, template in self._USED_COLLECTION_PREFIXES.items():
+            if rel.startswith(prefix):
+                return template.format(anima=self._current_anima_name())
+        return None
+
+    def _current_anima_name(self) -> str:
+        return str(getattr(self, "_anima_name", "") or self._anima_dir.name)
+
+    def _mark_longterm_bm25_dirty(self, rel: str) -> None:
+        if not rel.startswith(("knowledge/", "episodes/", "procedures/")):
+            return
+        try:
+            from core.memory.bm25 import mark_longterm_bm25_dirty
+
+            mark_longterm_bm25_dirty(self._anima_dir, reason=f"memory_write:{rel}")
+        except Exception:
+            logger.debug("Failed to mark long-term BM25 index dirty after memory write: %s", rel, exc_info=True)
 
     def _retrieve_neo4j_memories(
         self,
@@ -706,6 +765,7 @@ class MemoryToolsMixin:
 
             # Record skill view event
             self._record_skill_view_if_applicable(rel)
+            self._record_memory_file_used(rel)
 
             content = path.read_text(encoding="utf-8")
             lines = content.splitlines(keepends=True)
@@ -1032,6 +1092,7 @@ class MemoryToolsMixin:
                     indexer.index_file(path, memory_type=memory_type, force=True)
                 except Exception as e:
                     logger.warning("Failed to update RAG index for %s: %s", rel, e)
+            self._mark_longterm_bm25_dirty(rel)
 
         # Auto-update RAG index for knowledge writes + origin frontmatter
         # (skip origin injection when auto-frontmatter already handled it)
@@ -1070,6 +1131,10 @@ class MemoryToolsMixin:
                     )
                 except Exception as e:
                     logger.warning("Failed to update RAG index for %s: %s", rel, e)
+            self._mark_longterm_bm25_dirty(rel)
+
+        if rel.startswith("episodes/") and rel.endswith(".md"):
+            self._mark_longterm_bm25_dirty(rel)
 
         return result
 
@@ -1127,6 +1192,7 @@ class MemoryToolsMixin:
                 counter += 1
 
         shutil.move(str(target), str(dest))
+        self._mark_longterm_bm25_dirty(rel)
 
         logger.info("archive_memory_file: %s -> %s (reason: %s)", rel, dest.name, reason)
 
