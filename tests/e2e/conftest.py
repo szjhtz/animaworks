@@ -36,11 +36,17 @@ class _DeterministicEmbeddingModel:
 
     def encode(
         self,
-        texts: list[str],
+        texts: str | list[str],
         *,
         convert_to_numpy: bool = True,
         show_progress_bar: bool = False,
     ):
+        if isinstance(texts, str):
+            vector = self._embed(texts)
+            if convert_to_numpy:
+                return np.array(vector, dtype=float)
+            return vector
+
         vectors = [self._embed(text) for text in texts]
         if convert_to_numpy:
             return np.array(vectors, dtype=float)
