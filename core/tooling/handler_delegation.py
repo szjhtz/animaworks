@@ -23,6 +23,52 @@ if TYPE_CHECKING:
 logger = logging.getLogger("animaworks.tool_handler")
 
 
+def _record_taskboard_delegation(
+    *,
+    delegated_to: str,
+    delegated_task_id: str,
+    delegator: str,
+    tracking_task_id: str | None = None,
+) -> None:
+    """Record delegation queue entries in TaskBoard metadata.
+
+    task_queue.jsonl remains the compatibility source of task bodies; TaskBoard
+    gets the primary cross-org visibility row for every new delegation.
+    """
+    try:
+        from core.taskboard.models import AttentionVisibility, BoardColumn
+        from core.taskboard.store import TaskBoardStore
+
+        store = TaskBoardStore()
+        store.upsert_metadata(
+            anima_name=delegated_to,
+            task_id=delegated_task_id,
+            actor=delegator,
+            event_type="metadata_upserted",
+            visibility=AttentionVisibility.ACTIVE,
+            column=BoardColumn.TODO,
+            source_ref=f"task_queue:{delegated_to}:{delegated_task_id}",
+        )
+        if tracking_task_id:
+            store.upsert_metadata(
+                anima_name=delegator,
+                task_id=tracking_task_id,
+                actor=delegator,
+                event_type="metadata_upserted",
+                visibility=AttentionVisibility.ACTIVE,
+                column=BoardColumn.WAITING,
+                source_ref=f"task_queue:{delegator}:{tracking_task_id}",
+            )
+    except Exception:
+        logger.warning(
+            "Failed to record delegation in TaskBoard: %s -> %s (%s)",
+            delegator,
+            delegated_to,
+            delegated_task_id,
+            exc_info=True,
+        )
+
+
 class DelegationMixin(OrgHelpersMixin):
     """Mixin for delegate_task and task_tracker tools."""
 
@@ -171,6 +217,12 @@ class DelegationMixin(OrgHelpersMixin):
             own_entry = None
 
         own_id = own_entry.task_id if own_entry else "persist_failed"
+        _record_taskboard_delegation(
+            delegated_to=target_name,
+            delegated_task_id=sub_entry.task_id,
+            delegator=self._anima_name,
+            tracking_task_id=own_entry.task_id if own_entry else None,
+        )
         self._activity.log(
             "tool_use",
             tool="delegate_task",

@@ -167,6 +167,12 @@ class VectorWorkerManager:
         self.base_url = f"http://{self.host}:{port}"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / "vector-worker.log"
+        try:
+            from core.memory.housekeeping import _rotate_daemon_log
+
+            _rotate_daemon_log(log_path, max_size_mb=50, keep_generations=5)
+        except Exception:
+            logger.debug("Failed to rotate vector worker log before spawn: %s", log_path, exc_info=True)
         log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
         env = os.environ.copy()
         env.pop("ANIMAWORKS_VECTOR_URL", None)
