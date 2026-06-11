@@ -89,8 +89,9 @@ python -m benchmarks.locomo.runner \
 `category_dependent_normalization_enabled`、`protocol_version` が記録される。`summary.standard_protocol`
 には主指標値、judge独立性、leakage-free判定、error率、valid判定が記録される。
 
-2026-06-11 のローカル再基準化試行は `benchmarks/results/locomo_standard_protocol_baseline_20260611.json`
-に記録した。2問smokeの段階で error率が100%となったため、有効な10会話baselineではない。
+2026-06-11 の標準baselineは `benchmarks/results/locomo_standard_protocol_baseline_20260611.json`
+に記録した。`answer_model=azure/gpt-4.1` / `judge_model=azure/gpt-4o` の10会話・1540問runで、
+error率0.0%、主指標 `cat5_excluded.overall_judge` 60.5%、副指標 `overall_f1` 45.2%。
 
 ## 検索モード
 
@@ -158,6 +159,8 @@ results/
 |------|------|------|
 | `LOCOMO_ANSWER_MODEL` | No | 回答モデル（default: `deepseek-v4-flash`） |
 | `LOCOMO_LLM_CREDENTIAL` | No | `~/.animaworks/config.json` の credential 名（default: `vllm-lb` → `http://localhost:4000/v1`） |
+| `LOCOMO_JUDGE_LLM_CREDENTIAL` | No | judge を回答モデルと別 credential に流す場合の credential 名 |
+| `AZURE_API_VERSION` | No | Azure OpenAI credential を使う場合の API version |
 | `OPENAI_API_BASE` | No | 明示 override（未設定時は credential 解決） |
 | `OPENAI_API_KEY` | 推奨 | API キー（ローカル LiteLLM では `dummy` 可） |
 

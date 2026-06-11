@@ -1,9 +1,8 @@
 {
   "schema": "locomo-standard-baseline-record-v1",
-  "recorded_at": "2026-06-11T04:06:00+09:00",
-  "status": "invalid_smoke_run",
-  "valid_baseline": false,
-  "reason": "The local LiteLLM proxy timed out or failed judge calls during a 2-question standard-protocol smoke run; a valid 10-conversation baseline was not produced.",
+  "recorded_at": "2026-06-11T12:32:45+09:00",
+  "status": "valid_10_conversation_baseline",
+  "valid_baseline": true,
   "standard_protocol": {
     "protocol_version": "locomo-integrity-v1",
     "mode": "scope_all",
@@ -14,21 +13,50 @@
     "leakage_alias_map_enabled": false,
     "category_branches_enabled": false,
     "category_dependent_normalization_enabled": false,
+    "max_questions": 0,
     "max_error_rate": 0.02,
     "judge_must_differ_from_answer_model": true
   },
-  "attempt": {
-    "command": "OPENAI_API_BASE=http://localhost:4000/v1 OPENAI_API_KEY=dummy ANIMAWORKS_DATA_DIR=/tmp/animaworks-test-213-smoke2 uv run python -m benchmarks.locomo.runner --standard-protocol --answer-model deepseek-v4-flash --judge-model deepseek-chat --answer-timeout 60 --answer-max-retries 0 --max-questions 2 --output /tmp/locomo-standard-smoke-213b",
-    "output_file": "/tmp/locomo-standard-smoke-213b/2026-06-11T03-59-41_scope_all.json",
-    "max_questions": 2,
-    "answer_model": "deepseek-v4-flash",
-    "judge_model": "deepseek-chat",
-    "overall_f1": 0.5,
-    "overall_judge": null,
-    "error_count": 2,
-    "error_rate": 1.0,
-    "invalid_due_to_error_rate": true,
-    "standard_protocol_valid": false
+  "run": {
+    "command": "LOCOMO_LLM_CREDENTIAL=azure LOCOMO_JUDGE_LLM_CREDENTIAL=azure AZURE_API_VERSION=2025-01-01-preview CUDA_VISIBLE_DEVICES= ANIMAWORKS_DATA_DIR=/tmp/animaworks-locomo-standard-213-azure-gpt41-gpt4o uv run python -m benchmarks.locomo.runner --standard-protocol --answer-model azure/gpt-4.1 --judge-model azure/gpt-4o --answer-timeout 120 --answer-max-retries 1 --checkpoint-every 25 --output benchmarks/results/locomo-standard-20260611-azure-gpt41-gpt4o",
+    "output_file": "benchmarks/results/locomo-standard-20260611-azure-gpt41-gpt4o/2026-06-11T10-57-00_scope_all.json",
+    "checkpoint_file": "benchmarks/results/locomo-standard-20260611-azure-gpt41-gpt4o/2026-06-11T10-57-00_scope_all.partial.json",
+    "answer_model": "azure/gpt-4.1",
+    "judge_model": "azure/gpt-4o",
+    "judge_model_independent": true,
+    "rows": 1540,
+    "errors": 0,
+    "error_rate": 0.0,
+    "standard_protocol_valid": true,
+    "wall_time_seconds": 5745.7,
+    "generated_result_note": "The full per-question JSON is a generated benchmark artifact under the gitignored benchmarks/results/ output directory; this file is the committed baseline record."
   },
-  "next_valid_run_command": "OPENAI_API_BASE=http://localhost:4000/v1 OPENAI_API_KEY=dummy ANIMAWORKS_DATA_DIR=/tmp/animaworks-locomo-standard uv run python -m benchmarks.locomo.runner --standard-protocol --answer-model deepseek-v4-flash --judge-model openai/deepseek-chat --answer-timeout 180 --answer-max-retries 0 --output benchmarks/locomo/results/standard_20260611"
+  "metrics": {
+    "overall_f1": 0.4521181619017066,
+    "overall_judge": 0.6048701298701299,
+    "standard_primary": 0.6048701298701299,
+    "standard_secondary": 0.4521181619017066,
+    "by_category": {
+      "multi_hop": {
+        "f1": 0.3527128712105149,
+        "judge": 0.4734042553191489,
+        "count": 282
+      },
+      "temporal": {
+        "f1": 0.48089492730788613,
+        "judge": 0.6433021806853583,
+        "count": 321
+      },
+      "complex": {
+        "f1": 0.21653524970266716,
+        "judge": 0.421875,
+        "count": 96
+      },
+      "open_domain": {
+        "f1": 0.501358244958354,
+        "judge": 0.6551724137931034,
+        "count": 841
+      }
+    }
+  }
 }
