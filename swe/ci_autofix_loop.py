@@ -101,7 +101,7 @@ class CIAutofixLoop:
             return AutofixOutcome(LoopStatus.FAILED, message=f"Unsupported mode: {self.config.mode}")
 
         dirty = self._git_status()
-        self._baseline_dirty_paths = self._status_paths(dirty)
+        self._baseline_dirty_paths = self._expand_dirty_paths(self._status_paths(dirty))
         if dirty and not self.config.allow_dirty:
             return AutofixOutcome(
                 LoopStatus.DIRTY_WORKTREE,
@@ -288,6 +288,7 @@ Failure logs:
         diff = self.runner.run(["git", "diff", "HEAD"], cwd=self.config.repo_dir, timeout=60)
         if not diff.ok:
             return diff
+        reviewed_diff = diff.stdout
 
         prompt = f"""You are the CI auto-fix Reviewer for AnimaWorks.
 
@@ -318,6 +319,20 @@ Patch:
         if not result.ok:
             return result
 
+        post_review_intent = self._include_untracked_in_diff()
+        if not post_review_intent.ok:
+            return post_review_intent
+        post_review_diff = self.runner.run(["git", "diff", "HEAD"], cwd=self.config.repo_dir, timeout=60)
+        if not post_review_diff.ok:
+            return post_review_diff
+        if post_review_diff.stdout != reviewed_diff:
+            return CommandResult(
+                ("review-worktree-guard",),
+                1,
+                "",
+                "Reviewer command modified the worktree after the reviewed diff was captured.",
+            )
+
         verdict = result.combined_output.upper()
         if "NEEDS_CHANGES" in verdict or "REQUEST_CHANGES" in verdict:
             return CommandResult(result.args, 1, result.stdout, result.stderr)
@@ -344,7 +359,7 @@ Patch:
         result = self.runner.run(["git", "status", "--porcelain"], cwd=self.config.repo_dir, timeout=60)
         if not result.ok:
             raise RuntimeError(f"git status failed: {result.tail()}")
-        return result.stdout.strip()
+        return result.stdout.rstrip()
 
     def _include_untracked_in_diff(self) -> CommandResult:
         return self.runner.run(["git", "add", "--intent-to-add", "--", "."], cwd=self.config.repo_dir, timeout=60)
@@ -353,8 +368,10 @@ Patch:
         if not self._baseline_dirty_paths:
             return CommandResult(("baseline-dirty-path-guard",), 0, "clean baseline", "")
 
-        current_dirty_paths = self._status_paths(self._git_status())
-        overlapping = sorted(self._baseline_dirty_paths & current_dirty_paths)
+        current_dirty_paths = self._expand_dirty_paths(self._status_paths(self._git_status()))
+        overlapping = sorted(
+            path for path in current_dirty_paths if self._path_overlaps_any_baseline(path, self._baseline_dirty_paths)
+        )
         if not overlapping:
             return CommandResult(("baseline-dirty-path-guard",), 0, "baseline dirty paths cleared", "")
 
@@ -376,6 +393,26 @@ Patch:
                 path = path.rsplit(" -> ", 1)[-1]
             paths.add(path)
         return paths
+
+    def _expand_dirty_paths(self, paths: set[str]) -> set[str]:
+        expanded = set(paths)
+        for path in paths:
+            candidate = self.config.repo_dir / path.rstrip("/")
+            if not candidate.is_dir():
+                continue
+            for child in candidate.rglob("*"):
+                if child.is_file():
+                    expanded.add(child.relative_to(self.config.repo_dir).as_posix())
+        return expanded
+
+    @staticmethod
+    def _path_overlaps_any_baseline(path: str, baseline_paths: set[str]) -> bool:
+        for baseline in baseline_paths:
+            baseline_prefix = baseline if baseline.endswith("/") else f"{baseline}/"
+            path_prefix = path if path.endswith("/") else f"{path}/"
+            if path == baseline or path.startswith(baseline_prefix) or baseline.startswith(path_prefix):
+                return True
+        return False
 
     def _current_branch(self) -> str:
         result = self.runner.run(["git", "branch", "--show-current"], cwd=self.config.repo_dir, timeout=60)

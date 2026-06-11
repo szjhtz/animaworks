@@ -243,7 +243,7 @@ def test_reviewer_needs_changes_exhausts_without_commit(tmp_path: Path) -> None:
 
 def test_untracked_files_are_included_in_reviewer_prompt(tmp_path: Path) -> None:
     _init_repo(tmp_path)
-    captured_prompt = tmp_path / "review_prompt.txt"
+    captured_prompt = tmp_path.with_name(f"{tmp_path.name}_review_prompt.txt")
     gate = (
         sys.executable,
         "-c",
