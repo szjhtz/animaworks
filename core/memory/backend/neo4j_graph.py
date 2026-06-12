@@ -130,6 +130,7 @@ class Neo4jGraphBackend(MemoryBackend):
         texts: list[str],
         *,
         purpose: Literal["document", "query"] = "document",
+        priority: Literal["interactive", "bulk"] | None = None,
     ) -> list[list[float]]:
         """Generate embeddings using the shared singleton model.
 
@@ -143,7 +144,13 @@ class Neo4jGraphBackend(MemoryBackend):
         try:
             from core.memory.rag.singleton import generate_embeddings
 
-            result = await asyncio.to_thread(generate_embeddings, texts, purpose=purpose)
+            resolved_priority = priority or ("interactive" if purpose == "query" else "bulk")
+            result = await asyncio.to_thread(
+                generate_embeddings,
+                texts,
+                purpose=purpose,
+                priority=resolved_priority,
+            )
             self._embedding_available = True
             return result
         except Exception:

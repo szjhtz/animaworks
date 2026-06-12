@@ -53,4 +53,4 @@ def test_generate_embeddings_http_sends_embedding_purpose(monkeypatch) -> None:
         assert generate_embeddings(["hello"], purpose="query") == [[1.0]]
 
     response.raise_for_status.assert_called_once()
-    assert post.call_args.kwargs["json"] == {"texts": ["hello"], "purpose": "query"}
+    assert post.call_args.kwargs["json"] == {"texts": ["hello"], "purpose": "query", "priority": "interactive"}

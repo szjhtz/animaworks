@@ -97,6 +97,22 @@ async def test_startup_status_returns_progress_snapshot(data_dir: Path):
 
 
 @pytest.mark.asyncio
+async def test_startup_ready_snapshot_includes_ready_at(data_dir: Path):
+    app = _make_app(data_dir)
+    startup_progress.begin_startup("booting")
+    startup_progress.set_phase("ready", detail="ready")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/startup-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ready"
+    assert isinstance(data["ready_at"], float)
+
+
+@pytest.mark.asyncio
 async def test_startup_gate_allows_normal_routes_after_ready(data_dir: Path):
     app = _make_app(data_dir)
     startup_progress.set_phase("ready")

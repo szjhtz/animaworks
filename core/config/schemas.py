@@ -307,6 +307,11 @@ class GPUConfig(BaseModel):
     nli_device: Literal["auto", "cuda", "cpu"] = "cpu"
     reranker_device: Literal["auto", "cuda", "cpu"] = "cpu"
     embedding_batch_size: int = Field(default=32, ge=1)
+    embedding_bulk_yield_batches: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum consecutive embedding batches bulk work may yield to waiting interactive work.",
+    )
 
 
 class Neo4jConfig(BaseModel):
@@ -371,6 +376,7 @@ class PrimingConfig(BaseModel):
     """Configuration for priming layer (automatic memory retrieval)."""
 
     dynamic_budget: bool = True
+    channel_timeout_seconds: float = Field(default=60.0, ge=0.1)
     budget_greeting: int = 500
     budget_question: int = 2000
     budget_request: int = 3000
@@ -544,6 +550,11 @@ class ServerConfig(BaseModel):
     max_streaming_duration: int = 1800  # max streaming duration before hang (seconds)
     busy_hang_threshold: int = 900  # no-progress timeout for busy processes (seconds)
     anima_startup_ready_timeout: int = Field(default=120, ge=1)
+    health_check_warmup_seconds: int = Field(default=300, ge=0)
+    runner_warmup_seconds: int = Field(default=180, ge=0)
+    spawn_timeout: int = Field(default=300, ge=1)
+    supervisor_respawn_max_retries: int = Field(default=3, ge=1)
+    supervisor_respawn_retry_interval_seconds: float = Field(default=30.0, ge=0.0)
     stream_checkpoint_enabled: bool = True  # save tool results during streaming
     stream_retry_max: int = 3  # max automatic retries on stream disconnect
     stream_retry_delay_s: float = 5.0  # delay between retries (seconds)

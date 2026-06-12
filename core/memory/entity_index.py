@@ -209,7 +209,7 @@ def sync_entity_collection(
             from core.memory.rag.singleton import generate_embeddings
 
             def _default_embedding_fn(texts):
-                return generate_embeddings(texts, purpose="document")
+                return generate_embeddings(texts, purpose="document", priority="bulk")
 
             embedding_fn = _default_embedding_fn
         from core.memory.rag.store import Document
@@ -288,7 +288,7 @@ def _match_query_entities_from_collection(
             from core.memory.rag.singleton import generate_embeddings
 
             def _default_embedding_fn(texts):
-                return generate_embeddings(texts, purpose="query")
+                return generate_embeddings(texts, purpose="query", priority="interactive")
 
             embedding_fn = _default_embedding_fn
         embeddings = embedding_fn([query])

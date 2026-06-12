@@ -653,6 +653,21 @@ class AnimaRunner:
             result = await handler(request.params)
             return IPCResponse(id=request.id, result=result)
 
+        except asyncio.CancelledError:
+            if self.shutdown_event.is_set():
+                raise
+            logger.warning(
+                "IPC request cancelled without runner shutdown: %s (id=%s)",
+                request.method,
+                request.id,
+            )
+            return IPCResponse(
+                id=request.id,
+                error={
+                    "code": "REQUEST_CANCELLED",
+                    "message": "Request was cancelled; runner remains alive",
+                },
+            )
         except Exception as e:
             logger.exception("Error handling request %s: %s", request.method, e)
             return IPCResponse(id=request.id, error={"code": "EXECUTION_ERROR", "message": str(e)})

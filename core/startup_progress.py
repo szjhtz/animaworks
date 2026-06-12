@@ -34,6 +34,7 @@ class _StartupProgressState:
     done_count: int | None = None
     total_count: int | None = None
     started_at: float = 0.0
+    ready_at: float | None = None
     error: str | None = None
     tracking: bool = False
     cancel_requested: bool = False
@@ -52,6 +53,7 @@ def begin_startup(detail: str = "") -> None:
         _state.done_count = None
         _state.total_count = None
         _state.started_at = now
+        _state.ready_at = None
         _state.error = None
         _state.tracking = True
         _state.cancel_requested = False
@@ -99,6 +101,8 @@ def set_phase(
             _state.error = str(error)
         elif phase != "failed":
             _state.error = None
+        if phase == "ready":
+            _state.ready_at = time.time()
         if phase in _TERMINAL_PHASES:
             _state.tracking = False
             _state.cancel_requested = False
@@ -165,6 +169,7 @@ def snapshot() -> dict[str, object]:
             "done_count": _state.done_count,
             "total_count": _state.total_count,
             "started_at": _state.started_at,
+            "ready_at": _state.ready_at,
             "elapsed_seconds": elapsed,
             "error": _state.error,
         }
@@ -180,6 +185,7 @@ def _reset_for_testing(phase: StartupPhase = "ready") -> None:
         _state.done_count = None
         _state.total_count = None
         _state.started_at = time.time()
+        _state.ready_at = None
         _state.error = None
         _state.tracking = phase in _IN_PROGRESS_PHASES
         _state.cancel_requested = False

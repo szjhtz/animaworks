@@ -41,6 +41,11 @@ _init_failed: bool = False
 _direct_disabled_warned: bool = False
 
 EmbeddingPurpose = Literal["document", "query"]
+EmbeddingPriority = Literal["interactive", "bulk"]
+
+_priority_condition = threading.Condition(threading.Lock())
+_interactive_waiters = 0
+_bulk_yield_count = 0
 
 
 def _get_http_store(base_url: str, anima_name: str | None) -> HttpVectorStore:
@@ -175,6 +180,16 @@ def _get_embedding_batch_size() -> int:
         return 32
 
 
+def _get_bulk_yield_batches() -> int:
+    try:
+        from core.config import load_config
+
+        yield_batches = int(getattr(load_config().gpu, "embedding_bulk_yield_batches", 5))
+        return yield_batches if yield_batches > 0 else 5
+    except Exception:
+        return 5
+
+
 def _load_embedding_model_on_device(resolved_name: str, device: str) -> SentenceTransformer:
     global _embedding_model, _embedding_model_device, _embedding_model_name
 
@@ -269,12 +284,15 @@ def thread_safe_encode(
     convert_to_numpy: bool = True,
     show_progress_bar: bool = False,
     purpose: EmbeddingPurpose = "document",
+    priority: EmbeddingPriority = "interactive",
 ) -> list[list[float]]:
     """Serialize SentenceTransformer.encode() via _native_ops_lock.
 
     PyTorch models and ChromaDB Rust bindings both use native code
     that can SEGV when run concurrently under glibc 2.43+.  All native
     operations share a single lock to prevent parallel native execution.
+    Bulk callers release the lock between configured model batches so
+    waiting interactive callers can run first.
     """
     from core.gpu import is_cuda_failure, record_gpu_failure
 
@@ -282,28 +300,92 @@ def thread_safe_encode(
     prefixed_texts = _prefix_texts_for_embedding(texts, purpose=purpose)
     batch_size = _get_embedding_batch_size()
     try:
-        with _native_ops_lock:
-            embeddings = model.encode(
-                prefixed_texts,
-                convert_to_numpy=convert_to_numpy,
-                show_progress_bar=show_progress_bar,
-                batch_size=batch_size,
-            )
-        return _coerce_embeddings(embeddings)
+        return _encode_with_priority(
+            model,
+            prefixed_texts,
+            convert_to_numpy=convert_to_numpy,
+            show_progress_bar=show_progress_bar,
+            batch_size=batch_size,
+            priority=priority,
+        )
     except Exception as exc:
         if not is_cuda_failure(exc):
             raise
         logger.error("GPU failure detected - falling back to CPU embedding", exc_info=True)
         record_gpu_failure("embedding", exc)
         cpu_model = _reload_embedding_model_on_device(_get_configured_model_name(), "cpu")
-        with _native_ops_lock:
-            embeddings = cpu_model.encode(
-                prefixed_texts,
+        return _encode_with_priority(
+            cpu_model,
+            prefixed_texts,
+            convert_to_numpy=convert_to_numpy,
+            show_progress_bar=show_progress_bar,
+            batch_size=batch_size,
+            priority=priority,
+        )
+
+
+def _encode_with_priority(
+    model: SentenceTransformer,
+    texts: list[str],
+    *,
+    convert_to_numpy: bool,
+    show_progress_bar: bool,
+    batch_size: int,
+    priority: EmbeddingPriority,
+) -> list[list[float]]:
+    if priority == "interactive":
+        with _interactive_native_slot():
+            embeddings = model.encode(
+                texts,
                 convert_to_numpy=convert_to_numpy,
                 show_progress_bar=show_progress_bar,
                 batch_size=batch_size,
             )
         return _coerce_embeddings(embeddings)
+
+    all_embeddings: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        _wait_for_bulk_turn()
+        batch = texts[start : start + batch_size]
+        with _native_ops_lock:
+            embeddings = model.encode(
+                batch,
+                convert_to_numpy=convert_to_numpy,
+                show_progress_bar=show_progress_bar,
+                batch_size=batch_size,
+            )
+        all_embeddings.extend(_coerce_embeddings(embeddings))
+        with _priority_condition:
+            _priority_condition.notify_all()
+    return all_embeddings
+
+
+class _interactive_native_slot:
+    def __enter__(self) -> None:
+        global _interactive_waiters
+        with _priority_condition:
+            _interactive_waiters += 1
+            _priority_condition.notify_all()
+        _native_ops_lock.acquire()
+        with _priority_condition:
+            _interactive_waiters = max(0, _interactive_waiters - 1)
+            _priority_condition.notify_all()
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        _native_ops_lock.release()
+        with _priority_condition:
+            _priority_condition.notify_all()
+
+
+def _wait_for_bulk_turn() -> None:
+    global _bulk_yield_count
+    max_yields = _get_bulk_yield_batches()
+    with _priority_condition:
+        while _interactive_waiters > 0 and _bulk_yield_count < max_yields:
+            _bulk_yield_count += 1
+            _priority_condition.wait()
+        if _interactive_waiters == 0 or _bulk_yield_count >= max_yields:
+            _bulk_yield_count = 0
 
 
 def native_ops_lock() -> threading.Lock:
@@ -377,7 +459,12 @@ def get_embedding_dimension() -> int:
 # ── Unified embedding generation ─────────────────────────────────
 
 
-def generate_embeddings(texts: list[str], *, purpose: EmbeddingPurpose = "document") -> list[list[float]]:
+def generate_embeddings(
+    texts: list[str],
+    *,
+    purpose: EmbeddingPurpose = "document",
+    priority: EmbeddingPriority = "interactive",
+) -> list[list[float]]:
     """Generate embeddings via HTTP server or local model.
 
     When ``ANIMAWORKS_EMBED_URL`` is set, delegates to the server's
@@ -388,8 +475,8 @@ def generate_embeddings(texts: list[str], *, purpose: EmbeddingPurpose = "docume
         return []
     embed_url = os.environ.get("ANIMAWORKS_EMBED_URL")
     if embed_url:
-        return _generate_embeddings_http(texts, embed_url, purpose=purpose)
-    return _generate_embeddings_local(texts, purpose=purpose)
+        return _generate_embeddings_http(texts, embed_url, purpose=purpose, priority=priority)
+    return _generate_embeddings_local(texts, purpose=purpose, priority=priority)
 
 
 def _generate_embeddings_http(
@@ -397,6 +484,7 @@ def _generate_embeddings_http(
     embed_url: str,
     *,
     purpose: EmbeddingPurpose = "document",
+    priority: EmbeddingPriority = "interactive",
 ) -> list[list[float]]:
     """Call server's /api/internal/embed endpoint."""
     import httpx
@@ -406,7 +494,7 @@ def _generate_embeddings_http(
         batch = texts[i : i + _BATCH_LIMIT]
         resp = httpx.post(
             embed_url,
-            json={"texts": batch, "purpose": purpose},
+            json={"texts": batch, "purpose": purpose, "priority": priority},
             timeout=30.0,
         )
         resp.raise_for_status()
@@ -414,9 +502,14 @@ def _generate_embeddings_http(
     return all_embeddings
 
 
-def _generate_embeddings_local(texts: list[str], *, purpose: EmbeddingPurpose = "document") -> list[list[float]]:
+def _generate_embeddings_local(
+    texts: list[str],
+    *,
+    purpose: EmbeddingPurpose = "document",
+    priority: EmbeddingPriority = "interactive",
+) -> list[list[float]]:
     """Use local SentenceTransformer model."""
-    return thread_safe_encode(texts, purpose=purpose)
+    return thread_safe_encode(texts, purpose=purpose, priority=priority)
 
 
 def get_embedding_model_name() -> str:
@@ -434,7 +527,8 @@ def get_embedding_e5_prefix_enabled() -> bool:
 
 def _reset_for_testing():
     """Reset singletons for test isolation."""
-    global _direct_disabled_warned, _embedding_model, _embedding_model_device, _embedding_model_name, _init_failed
+    global _bulk_yield_count, _direct_disabled_warned, _embedding_model, _embedding_model_device, _embedding_model_name
+    global _init_failed, _interactive_waiters
     from core.gpu import reset_gpu_status_for_testing
 
     with _lock:
@@ -445,4 +539,8 @@ def _reset_for_testing():
         _embedding_model_device = None
         _init_failed = False
         _direct_disabled_warned = False
+        with _priority_condition:
+            _interactive_waiters = 0
+            _bulk_yield_count = 0
+            _priority_condition.notify_all()
         reset_gpu_status_for_testing()

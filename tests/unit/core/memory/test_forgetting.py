@@ -460,6 +460,7 @@ class TestNeurogenesisSourceSync:
         mock_embeddings.assert_called_once_with(
             ["alpha", "alpha duplicate", "gamma"],
             purpose="query",
+            priority="bulk",
         )
         assert [(a["id"], b["id"], score) for a, b, score in pairs] == [("a", "b", 0.86)]
 

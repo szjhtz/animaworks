@@ -208,6 +208,17 @@ class LifecycleMixin:
                             )
                         except TimeoutError:
                             return self._handle_hard_timeout(_hard_timeout)
+                        except asyncio.CancelledError:
+                            current = asyncio.current_task()
+                            if current is not None and current.cancelling():
+                                raise
+                            logger.warning("[%s] run_heartbeat cancelled by request; runner remains alive", self.name)
+                            return CycleResult(
+                                trigger="heartbeat",
+                                action="cancelled",
+                                summary="Heartbeat cancelled",
+                                duration_ms=0,
+                            )
                         finally:
                             active_session_type.reset(_session_token)
                             _keepalive.cancel()
@@ -772,6 +783,21 @@ class LifecycleMixin:
                             agent.update_model_config(bg_config)
                         try:
                             result = await agent.run_cycle(prompt, trigger=f"cron:{task_name}")
+                        except asyncio.CancelledError:
+                            current = asyncio.current_task()
+                            if current is not None and current.cancelling():
+                                raise
+                            logger.warning(
+                                "[%s] run_cron_task cancelled by request; runner remains alive task=%s",
+                                self.name,
+                                task_name,
+                            )
+                            return CycleResult(
+                                trigger=f"cron:{task_name}",
+                                action="cancelled",
+                                summary="Cron task cancelled",
+                                duration_ms=0,
+                            )
                         finally:
                             if original_config is not None:
                                 agent.update_model_config(original_config)

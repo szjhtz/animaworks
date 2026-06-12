@@ -374,7 +374,7 @@ class ProceduralDistiller:
         # Generate embeddings
         import numpy as np
 
-        embeddings_list = generate_embeddings(texts)
+        embeddings_list = generate_embeddings(texts, priority="bulk")
         embeddings = np.array(embeddings_list)
 
         # Normalize for cosine similarity

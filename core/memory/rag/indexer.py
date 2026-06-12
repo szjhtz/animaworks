@@ -1021,6 +1021,7 @@ class MemoryIndexer:
         texts: list[str],
         *,
         purpose: Literal["document", "query"] = "document",
+        priority: Literal["interactive", "bulk"] | None = None,
     ) -> list[list[float]]:
         """Generate embeddings for a batch of texts.
 
@@ -1033,7 +1034,8 @@ class MemoryIndexer:
         logger.debug("Generating embeddings for %d texts", len(texts))
         from core.memory.rag.singleton import generate_embeddings
 
-        return generate_embeddings(texts, purpose=purpose)
+        resolved_priority = priority or ("interactive" if purpose == "query" else "bulk")
+        return generate_embeddings(texts, purpose=purpose, priority=resolved_priority)
 
     @staticmethod
     def _compute_file_hash(file_path: Path) -> str:

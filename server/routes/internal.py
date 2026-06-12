@@ -19,7 +19,7 @@ from server.events import emit
 logger = logging.getLogger("animaworks.routes.internal")
 
 _native_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1,
+    max_workers=4,
     thread_name_prefix="native-ops",
 )
 
@@ -34,6 +34,7 @@ class MessageSentNotification(BaseModel):
 class EmbedRequest(BaseModel):
     texts: list[str]
     purpose: Literal["document", "query"] = "document"
+    priority: Literal["interactive", "bulk"] = "interactive"
 
 
 class VectorQueryRequest(BaseModel):
@@ -180,7 +181,7 @@ def create_internal_router() -> APIRouter:
         loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(
             _native_executor,
-            partial(thread_safe_encode, body.texts, purpose=body.purpose),
+            partial(thread_safe_encode, body.texts, purpose=body.purpose, priority=body.priority),
         )
         return {"embeddings": embeddings}
 
