@@ -15,7 +15,7 @@ def _doc(doc_id: str = "doc1", content: str = "hello", metadata: dict | None = N
 
 
 def test_raise_fd_soft_limit_raises_to_hard(monkeypatch) -> None:
-    from core.memory.rag import vector_worker
+    from core.platform.fd_limits import raise_fd_soft_limit
 
     calls: list[tuple[int, tuple[int, int]]] = []
     fake_resource = SimpleNamespace(
@@ -26,12 +26,12 @@ def test_raise_fd_soft_limit_raises_to_hard(monkeypatch) -> None:
     )
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
 
-    assert vector_worker._raise_fd_soft_limit() == (4096, 4096)
+    assert raise_fd_soft_limit() == (4096, 4096)
     assert calls == [(7, (4096, 4096))]
 
 
 def test_raise_fd_soft_limit_skips_when_already_at_target(monkeypatch) -> None:
-    from core.memory.rag import vector_worker
+    from core.platform.fd_limits import raise_fd_soft_limit
 
     calls: list[tuple[int, tuple[int, int]]] = []
     fake_resource = SimpleNamespace(
@@ -42,12 +42,12 @@ def test_raise_fd_soft_limit_skips_when_already_at_target(monkeypatch) -> None:
     )
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
 
-    assert vector_worker._raise_fd_soft_limit() == (4096, 4096)
+    assert raise_fd_soft_limit() == (4096, 4096)
     assert calls == []
 
 
 def test_raise_fd_soft_limit_returns_original_when_setrlimit_fails(monkeypatch) -> None:
-    from core.memory.rag import vector_worker
+    from core.platform.fd_limits import raise_fd_soft_limit
 
     def fail_setrlimit(_limit: int, _value: tuple[int, int]) -> None:
         raise OSError("permission denied")
@@ -60,11 +60,11 @@ def test_raise_fd_soft_limit_returns_original_when_setrlimit_fails(monkeypatch) 
     )
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
 
-    assert vector_worker._raise_fd_soft_limit() == (1024, 4096)
+    assert raise_fd_soft_limit() == (1024, 4096)
 
 
 def test_raise_fd_soft_limit_uses_finite_target_for_unlimited_hard(monkeypatch) -> None:
-    from core.memory.rag import vector_worker
+    from core.platform.fd_limits import _NOFILE_INFINITY_FALLBACK, raise_fd_soft_limit
 
     calls: list[tuple[int, tuple[int, int]]] = []
     fake_resource = SimpleNamespace(
@@ -75,8 +75,8 @@ def test_raise_fd_soft_limit_uses_finite_target_for_unlimited_hard(monkeypatch) 
     )
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
 
-    assert vector_worker._raise_fd_soft_limit() == (vector_worker._NOFILE_INFINITY_FALLBACK, -1)
-    assert calls == [(7, (vector_worker._NOFILE_INFINITY_FALLBACK, -1))]
+    assert raise_fd_soft_limit() == (_NOFILE_INFINITY_FALLBACK, -1)
+    assert calls == [(7, (_NOFILE_INFINITY_FALLBACK, -1))]
 
 
 def test_vector_worker_shutdown_closes_cached_stores(monkeypatch) -> None:

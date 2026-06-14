@@ -42,8 +42,8 @@ def test_classifies_today_error_finding_id():
 def test_classifies_native_and_sqlite_corruption():
     assert classify_corruption_error("database disk image is malformed") == "sqlite_malformed"
     assert classify_corruption_error(-11) == "native_segfault"
+    assert classify_corruption_error("segmentation fault") == "native_segfault"
     assert classify_corruption_error("hnsw index panic: corrupt graph") == "hnsw_corruption"
-    assert classify_corruption_error("disk I/O error (code: 522)") == "chroma_corruption"
     assert classify_corruption_error("Failed to get segments for collection") == "chroma_corruption"
     assert classify_corruption_error("no such table: embeddings_queue") == "chroma_corruption"
 
@@ -51,6 +51,12 @@ def test_classifies_native_and_sqlite_corruption():
 def test_does_not_classify_operational_noise():
     assert classify_corruption_error("Connection refused") is None
     assert classify_corruption_error("Collection 'foo' not found") is None
+
+
+def test_does_not_classify_resource_exhaustion_or_transient_io_errors():
+    assert classify_corruption_error("hnsw segment reader: Too many open files (os error 24)") is None
+    assert classify_corruption_error("unable to open database file") is None
+    assert classify_corruption_error("Internal error: error returned from database: (code: 522) disk I/O error") is None
 
 
 def test_collection_owner_uses_default_anima_for_shared_collection():

@@ -441,6 +441,7 @@ def reset_vector_store(anima_name: str | None = None) -> None:
             _vector_stores.clear()
             for sibling_name, sibling_store in siblings:
                 _close_store(sibling_store, sibling_name)
+            _clear_chroma_system_cache()
 
         http_keys = [key for key in _http_stores if key[1] == anima_name]
         for key in http_keys:
@@ -462,6 +463,8 @@ def close_all_vector_stores() -> None:
 
     for anima_name, store in stores:
         _close_store(store, anima_name)
+    if stores:
+        _clear_chroma_system_cache()
     for (_base_url, anima_name), store in http_stores:
         _close_store(store, anima_name)
 
@@ -473,6 +476,15 @@ def _close_store(store, anima_name: str | None) -> None:
             close()
         except Exception:
             logger.debug("Failed to close vector store for %s", anima_name, exc_info=True)
+
+
+def _clear_chroma_system_cache() -> None:
+    try:
+        from chromadb.api.client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        logger.debug("Failed to clear ChromaDB system cache", exc_info=True)
 
 
 def get_embedding_dimension() -> int:

@@ -1021,7 +1021,10 @@ async def main() -> None:
     setup_logging(args.anima_name, args.log_dir)
 
     from core.config import load_config
+    from core.platform.fd_limits import raise_fd_soft_limit
     from core.time_utils import configure_timezone
+
+    raise_fd_soft_limit(logger=logger, process_label="anima runner")
 
     try:
         cfg = load_config()
