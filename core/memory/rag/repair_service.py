@@ -57,6 +57,14 @@ _KNOWN_CORRUPTION_REASONS = {
     "vector_worker_crash",
 }
 
+# Corruption reasons whose claim is about the SQLite store itself and can
+# therefore be definitively refuted by a passing ``PRAGMA quick_check``. A
+# poisoned chromadb process cache makes a healthy on-disk DB raise these even
+# though the file is intact (the false-positive that drives the repair churn).
+# Segment/process-level reasons (hnsw_corruption, native_segfault) are NOT in
+# this set because a SQLite check cannot vouch for hnsw segment files.
+_SQLITE_REFUTABLE_REASONS = {"chroma_corruption", "sqlite_malformed"}
+
 
 class RAGRepairService:
     """Detects and repairs corrupt per-anima RAG vector stores."""
@@ -142,6 +150,27 @@ class RAGRepairService:
             )
             return False
 
+        # Cache-poisoning false-positive guard. chromadb's process-global system
+        # cache can be transiently poisoned (e.g. by a sibling store's close()),
+        # making a perfectly healthy on-disk DB raise sqlite-level corruption
+        # errors ("Failed to get segments", "file is not a database", torn-read
+        # "database corrupt"). Quarantining and rebuilding a healthy DB on those
+        # false signals is what drives the destructive repair churn that
+        # saturates the vector worker. If quick_check confirms the SQLite store
+        # is intact, treat the error as transient and let the store-level
+        # self-heal (cache reset + one retry) recover, without escalating to a
+        # repair.
+        if reason in _SQLITE_REFUTABLE_REASONS and self._sqlite_quick_check_ok(owner):
+            logger.info(
+                "Ignoring RAG corruption signal; on-disk SQLite passed quick_check "
+                "(transient cache poisoning): owner=%s collection=%s reason=%s error=%s",
+                owner,
+                collection,
+                reason,
+                error,
+            )
+            return False
+
         signal = {
             "at": iso(),
             "collection": collection,
@@ -166,6 +195,23 @@ class RAGRepairService:
             include_shared=True,
             background=True,
         )
+
+    @staticmethod
+    def _sqlite_quick_check_ok(owner: str) -> bool:
+        """Return True only if the owner's Chroma SQLite passes quick_check.
+
+        Ambiguous results (busy / timeout / unavailable / missing / corrupt)
+        return False so a potentially real corruption signal is not suppressed.
+        """
+        try:
+            from core.memory.rag.sqlite_health import quick_check_chroma_sqlite
+            from core.paths import get_anima_vectordb_dir
+
+            result = quick_check_chroma_sqlite(get_anima_vectordb_dir(owner))
+        except Exception:
+            logger.debug("quick_check gate failed for owner=%s", owner, exc_info=True)
+            return False
+        return result.status == "ok"
 
     def _record_signal(self, anima_name: str, signal: dict[str, Any]) -> None:
         cutoff = utc_now() - self.window

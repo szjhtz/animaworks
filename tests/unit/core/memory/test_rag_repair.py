@@ -111,6 +111,93 @@ def test_single_shot_corruption_triggers_immediate_repair(data_dir: Path):
     service.request_repair.assert_called_once()
 
 
+def test_chroma_corruption_suppressed_when_sqlite_quick_check_ok(data_dir: Path):
+    """A healthy on-disk SQLite refutes a chroma_corruption signal.
+
+    chromadb's process-global cache can be transiently poisoned, making an
+    intact DB raise "Failed to get segments". A passing quick_check means the
+    store is fine, so we must not escalate to a (destructive) repair.
+    """
+    service = RAGRepairService(enabled=True, threshold=1, window_minutes=5, cooldown_minutes=60)
+    service.request_repair = MagicMock(return_value=True)  # type: ignore[method-assign]
+    service._sqlite_quick_check_ok = lambda owner: True  # type: ignore[method-assign,assignment]
+
+    assert (
+        service.record_chroma_error(
+            anima_name="sora",
+            collection="sora_knowledge",
+            error="Error getting collection: Failed to get segments",
+            source="upsert",
+        )
+        is False
+    )
+    service.request_repair.assert_not_called()
+
+
+def test_chroma_corruption_still_repairs_when_sqlite_check_not_ok(data_dir: Path):
+    """Ambiguous/failing quick_check does not suppress a real corruption signal."""
+    service = RAGRepairService(enabled=True, threshold=1, window_minutes=5, cooldown_minutes=60)
+    service.request_repair = MagicMock(return_value=True)  # type: ignore[method-assign]
+    service._sqlite_quick_check_ok = lambda owner: False  # type: ignore[method-assign,assignment]
+
+    assert (
+        service.record_chroma_error(
+            anima_name="sora",
+            collection="sora_knowledge",
+            error="Error getting collection: Failed to get segments",
+            source="upsert",
+        )
+        is True
+    )
+    service.request_repair.assert_called_once()
+
+
+def test_hnsw_corruption_not_gated_by_sqlite_check(data_dir: Path):
+    """Segment-level reasons are not refutable by a SQLite check.
+
+    A healthy quick_check must NOT suppress an hnsw_corruption signal, and the
+    gate must not even consult the SQLite check for such reasons.
+    """
+    service = RAGRepairService(enabled=True, threshold=1, window_minutes=5, cooldown_minutes=60)
+    service.request_repair = MagicMock(return_value=True)  # type: ignore[method-assign]
+    service._sqlite_quick_check_ok = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    assert (
+        service.record_chroma_error(
+            anima_name="sora",
+            collection="sora_knowledge",
+            error="hnsw index panic: corrupt graph",
+            source="query",
+        )
+        is True
+    )
+    service.request_repair.assert_called_once()
+    service._sqlite_quick_check_ok.assert_not_called()
+
+
+def test_sqlite_quick_check_ok_true_for_intact_db(data_dir: Path):
+    """The gate helper returns True for an intact Chroma SQLite file."""
+    import sqlite3
+
+    from core.paths import get_anima_vectordb_dir
+
+    vdb = get_anima_vectordb_dir("sora")
+    vdb.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(vdb / "chroma.sqlite3")
+    try:
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert RAGRepairService._sqlite_quick_check_ok("sora") is True
+
+
+def test_sqlite_quick_check_ok_false_when_missing(data_dir: Path):
+    """A missing DB is not 'ok' for the gate, so signals are not suppressed."""
+    assert RAGRepairService._sqlite_quick_check_ok("sora") is False
+
+
 def test_record_chroma_error_ignores_noise_and_unknown_owner(data_dir: Path):
     service = RAGRepairService(enabled=True, threshold=2, window_minutes=5, cooldown_minutes=60)
 
