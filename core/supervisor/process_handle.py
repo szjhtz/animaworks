@@ -423,7 +423,10 @@ class ProcessHandle:
             return True
 
         except TimeoutError:
-            logger.warning("Ping timeout for %s", self.anima_name)
+            # Single ping timeouts are often benign while the runner is busy;
+            # _mgr_health emits warning/error logs after missed-ping aggregation
+            # and busy-hang detection decide the timeout is actionable.
+            logger.debug("Ping timeout for %s", self.anima_name)
             self.stats.missed_pings += 1
             return {"success": False, "is_busy": False} if return_details else False
         except Exception as e:
