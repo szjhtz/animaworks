@@ -102,16 +102,22 @@ async def _run_native(fn, *args, **kwargs):
 def _call_vector_store(anima_name: str | None, action: Callable[[Any], Any]) -> Any | None:
     from core.memory.rag.singleton import get_vector_store, reset_vector_store
 
-    store = get_vector_store(anima_name)
-    if store is None:
-        return None
     try:
+        store = get_vector_store(anima_name)
+        if store is None:
+            return None
         return action(store)
     except Exception:
         logger.warning("Vector worker native store action failed for owner=%s", anima_name or "shared", exc_info=True)
+        try:
+            reset_vector_store(anima_name)
+        except Exception:
+            logger.debug(
+                "Vector worker failed to reset native store after action failure for owner=%s",
+                anima_name or "shared",
+                exc_info=True,
+            )
         return _VECTOR_ACTION_ERROR
-    finally:
-        reset_vector_store(anima_name)
 
 
 def _vector_write_failed(operation: str, collection: str) -> JSONResponse:
