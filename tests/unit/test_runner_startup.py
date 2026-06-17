@@ -133,9 +133,7 @@ class TestAnimaRunnerPingReadiness:
             task = asyncio.create_task(runner.run())
             shutdown_task = asyncio.create_task(trigger_shutdown())
 
-            await asyncio.wait_for(
-                asyncio.gather(task, shutdown_task), timeout=5.0
-            )
+            await asyncio.wait_for(asyncio.gather(task, shutdown_task), timeout=5.0)
 
         # IPC should start BEFORE anima initialization
         assert call_order == ["ipc_start", "anima_init"]
