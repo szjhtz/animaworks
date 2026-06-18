@@ -159,6 +159,28 @@ def get_vector_store(anima_name: str | None = None) -> VectorStore | None:
     return _vector_stores.get(anima_name)
 
 
+def is_global_vector_store_init_failed() -> bool:
+    """Return whether vector-store initialization is globally latched off."""
+    with _lock:
+        return _init_failed
+
+
+def is_vector_store_init_failed(anima_name: str | None) -> bool:
+    """Return whether native vector-store initialization failed for one owner."""
+    with _lock:
+        return anima_name in _vector_store_init_failed
+
+
+def clear_vector_store_init_failed(anima_name: str) -> bool:
+    """Clear only the per-owner vector-store init failure latch."""
+    if anima_name is None:
+        return False
+    with _lock:
+        was_failed = anima_name in _vector_store_init_failed
+        _vector_store_init_failed.discard(anima_name)
+        return was_failed
+
+
 def _get_configured_model_name() -> str:
     """Read embedding model name from config.json, falling back to default."""
     try:

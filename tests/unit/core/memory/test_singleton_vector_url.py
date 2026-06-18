@@ -183,3 +183,24 @@ def test_chroma_vector_store_constructor_requires_direct_allow(monkeypatch, tmp_
 
     with pytest.raises(RuntimeError, match="Direct ChromaDB access is disabled"):
         ChromaVectorStore(persist_dir=tmp_path / "vectordb")
+
+
+def test_clear_vector_store_init_failed_only_clears_per_anima_latch() -> None:
+    """Clearing one anima's init latch must not mask global Chroma init failure."""
+    from core.memory.rag import singleton
+
+    singleton._init_failed = True
+    singleton._vector_store_init_failed.update({"sora", "rin", None})
+
+    assert singleton.is_global_vector_store_init_failed() is True
+    assert singleton.is_vector_store_init_failed("sora") is True
+    assert singleton.is_vector_store_init_failed("rin") is True
+    assert singleton.is_vector_store_init_failed(None) is True
+
+    assert singleton.clear_vector_store_init_failed("sora") is True
+
+    assert singleton.is_vector_store_init_failed("sora") is False
+    assert singleton.is_vector_store_init_failed("rin") is True
+    assert singleton.is_vector_store_init_failed(None) is True
+    assert singleton.is_global_vector_store_init_failed() is True
+    assert singleton.clear_vector_store_init_failed("sora") is False
