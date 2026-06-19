@@ -7,6 +7,13 @@ adhering to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-19
+
+### Fixed
+
+- Moved Codex SDK/CLI prerelease dependencies out of the default package install path so `uv pip install animaworks` resolves without `--prerelease allow`.
+- Removed the `codex` extra from `animaworks[all-tools]` because the upstream Codex SDK currently depends on an alpha CLI binary. Install `animaworks[codex]` explicitly when Mode C is needed.
+
 ## [0.9.0] - 2026-06-19
 
 ### Added
@@ -1595,7 +1602,8 @@ memory, and decision-making criteria.
 - Moved model mode patterns from config.json to models.json
 - Tool permissions changed from whitelist to default-allow (blacklist) model
 
-[Unreleased]: https://github.com/xuiltul/animaworks/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/xuiltul/animaworks/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/xuiltul/animaworks/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/xuiltul/animaworks/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xuiltul/animaworks/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xuiltul/animaworks/compare/v0.6.3...v0.7.0
