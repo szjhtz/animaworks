@@ -7,6 +7,13 @@ adhering to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-19
+
+### Fixed
+
+- Updated Codex Mode C tests to mock the optional `openai-codex` SDK when the `codex` extra is not installed, restoring the main CI path for the default `animaworks[all-tools]` test install.
+- Isolated the Channel E priming integration test from unrelated memory retrieval channels so it no longer attempts slow RAG/embed work under the unit-test timeout.
+
 ## [0.9.1] - 2026-06-19
 
 ### Fixed
@@ -1602,7 +1609,8 @@ memory, and decision-making criteria.
 - Moved model mode patterns from config.json to models.json
 - Tool permissions changed from whitelist to default-allow (blacklist) model
 
-[Unreleased]: https://github.com/xuiltul/animaworks/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/xuiltul/animaworks/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/xuiltul/animaworks/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/xuiltul/animaworks/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/xuiltul/animaworks/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xuiltul/animaworks/compare/v0.7.0...v0.8.0
