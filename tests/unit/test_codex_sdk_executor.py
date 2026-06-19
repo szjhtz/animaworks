@@ -83,6 +83,11 @@ _install_fake_openai_codex()
 # ── Fixtures ─────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _fake_openai_codex_sdk(fake_openai_codex_sdk):
+    pass
+
+
 @pytest.fixture
 def anima_dir(tmp_path: Path) -> Path:
     d = tmp_path / "animas" / "test-codex"
