@@ -294,6 +294,27 @@ def _resolve_engine_credentials(engine: str) -> dict[str, str]:
     if not entries:
         return {}
 
+    # claude: claude_code_login型credentialのトークンはcc-routerプロキシ専用で、
+    # 本家APIキーとして注入すると "API key invalid"、base_url併用でもプロキシ上流の
+    # Maxアカウント認証に依存して不安定（2026-07-02/07-03障害）。プロキシ型の場合は
+    # 何も注入せず、claude CLI自身のサブスクリプションログイン（~/.claude）を使う。
+    if engine == "claude":
+        try:
+            from core.config.models import load_config
+
+            cred = load_config().credentials.get("anthropic")
+            cred_type = str(getattr(cred, "type", "") or "")
+        except Exception as exc:
+            logger.debug("machine/claude: credential type check failed: %s", exc)
+            cred_type = ""
+        if cred_type != "api_key":
+            logger.debug(
+                "machine/claude: credential type %r is proxy-based; "
+                "using CLI subscription login instead of key injection",
+                cred_type,
+            )
+            return {}
+
     result: dict[str, str] = {}
     for cred_name, env_var, key_name in entries:
         if env_var in result:
@@ -330,6 +351,12 @@ def _build_env(engine: str) -> dict[str, str]:
     for k, v in creds.items():
         if k not in env:
             env[k] = v
+
+    # claude: プロキシ型credentialで注入なし（サブスクリプションログイン利用）の場合、
+    # 親プロセスから継承した ANTHROPIC_* が残っているとCLIが誤経路に接続するため除去する。
+    if engine == "claude" and not creds:
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_BASE_URL", None)
 
     # Ensure ~/.local/bin is on PATH so engine binaries (claude/codex/
     # cursor-agent/gemini) installed there are discoverable in the
@@ -485,6 +512,28 @@ def _stream_to_file(
     return exit_code, elapsed, timed_out, str(output_path)
 
 
+def _is_fs_sandboxed() -> bool:
+    """Detect inherited filesystem sandbox (e.g. Codex Landlock).
+
+    Mode C animas run their reasoning inside a Codex sandbox.  If the machine
+    CLI is invoked from that shell (instead of the native tool executed by the
+    runner process), child engines inherit the sandbox and fail with EROFS on
+    ``~/.config`` etc. (2026-07-02 4-engine outage).  Probe with a write to a
+    home-config path that engines need.
+    """
+    if os.environ.get("CODEX_SANDBOX"):
+        return True
+    probe_dir = Path.home() / ".config"
+    try:
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        probe = probe_dir / f".aw-machine-probe-{os.getpid()}"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return False
+    except OSError:
+        return True
+
+
 def _execute(
     engine: str,
     instruction: str,
@@ -494,6 +543,16 @@ def _execute(
     anima_dir: str | None = None,
 ) -> ToolResult:
     """Execute a machine tool synchronously."""
+    if _is_fs_sandboxed():
+        return ToolResult(
+            success=False,
+            error=(
+                "machine: サンドボックス化されたシェル内から呼ばれています"
+                "（~/.config への書き込み不可）。エンジンはEROFSで失敗します。"
+                "シェルコマンド `animaworks-tool machine` ではなく、"
+                "ネイティブの machine ツール（ツール呼び出し）を使ってください。"
+            ),
+        )
     exe = shutil.which(_ENGINE_COMMANDS[engine][0], path=_expanded_path())
     if exe is None:
         return ToolResult(
