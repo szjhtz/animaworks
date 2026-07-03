@@ -821,13 +821,6 @@ def dispatch(name: str, args: dict[str, Any]) -> str:
             ensure_ascii=False,
         )
 
-    allowed = _get_available_engines()
-    if engine not in allowed:
-        return json.dumps(
-            {"error": t("machine.engine_disabled", engine=engine, available=", ".join(allowed))},
-            ensure_ascii=False,
-        )
-
     if not instruction.strip():
         return json.dumps({"error": t("machine.empty_instruction")}, ensure_ascii=False)
 
@@ -837,6 +830,13 @@ def dispatch(name: str, args: dict[str, Any]) -> str:
     dir_err = _validate_working_directory(working_directory, anima_dir)
     if dir_err:
         return json.dumps({"error": dir_err}, ensure_ascii=False)
+
+    allowed = _get_available_engines()
+    if engine not in allowed:
+        return json.dumps(
+            {"error": t("machine.engine_disabled", engine=engine, available=", ".join(allowed))},
+            ensure_ascii=False,
+        )
 
     rate_err = _check_rate_limit(anima_dir, trigger)
     if rate_err:
