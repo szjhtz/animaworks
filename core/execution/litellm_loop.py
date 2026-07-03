@@ -58,13 +58,24 @@ from core.execution.base import (
     ToolCallRecord,
     strip_thinking_tags,
 )
+from core.execution.backoff import decorrelated_jitter
 from core.execution.error_classifier import FailoverReason, classify_llm_error, provider_family_of
+from core.execution.loop_guards import (
+    EmptyResponseTracker,
+    LlmCallInterrupted,
+    RunawayGuard,
+    call_llm_with_retry,
+    tool_call_signature,
+)
 from core.execution.rate_guard import get_rate_guard
 from core.execution.reminder import (
     SystemReminderQueue,
     msg_context_threshold,
+    msg_empty_response,
     msg_final_iteration,
     msg_output_truncated,
+    msg_tool_loop_halt,
+    msg_tool_loop_warning,
 )
 from core.memory import MemoryManager
 from core.memory.shortterm import ShortTermMemory
@@ -172,16 +183,36 @@ class LiteLLMExecutor(
         usage_acc = TokenUsage()
         cleanup_gate_marker(self._anima_dir)
         _gate_attempted = False
+        _empty_tracker = EmptyResponseTracker()
+        _runaway_guard = RunawayGuard()
+        _force_final = False
+        _final_reminder_sent = False
+        _classify = partial(classify_llm_error, provider_family=_guard_family)
+
+        def _on_llm_error(reason: Any, hint: Any, exc: Exception, attempt: int) -> None:
+            if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
+                _guard.report_block(
+                    _guard_family,
+                    hint.backoff_s or _guard.config.default_block_seconds,
+                    reason.value,
+                )
+            elif reason in (FailoverReason.AUTH, FailoverReason.BILLING):
+                logger.error(
+                    "A LiteLLM %s — human attention required: %s",
+                    reason.value,
+                    exc,
+                )
 
         for iteration in range(max_iterations):
             if self._check_interrupted():
                 logger.info("LiteLLM execute interrupted at iteration=%d", iteration)
                 return ExecutionResult(text="[Session interrupted by user]")
 
-            is_final_iteration = max_iterations > 1 and iteration == max_iterations - 1
+            is_final_iteration = _force_final or (max_iterations > 1 and iteration == max_iterations - 1)
             iter_tools = [] if is_final_iteration else tools
 
-            if is_final_iteration:
+            if is_final_iteration and not _final_reminder_sent:
+                _final_reminder_sent = True
                 messages.append(
                     {
                         "role": "user",
@@ -231,23 +262,22 @@ class LiteLLMExecutor(
                 call_kwargs["tools"] = tools
 
             try:
-                response = await litellm.acompletion(**call_kwargs)
+                response = await call_llm_with_retry(
+                    partial(litellm.acompletion, **call_kwargs),
+                    classify=_classify,
+                    next_backoff=decorrelated_jitter,
+                    interrupt_check=self._check_interrupted,
+                    on_classified_error=_on_llm_error,
+                )
+            except LlmCallInterrupted:
+                logger.info(
+                    "LiteLLM execute interrupted during retry backoff at iteration=%d",
+                    iteration,
+                )
+                return ExecutionResult(text="[Session interrupted by user]")
             except LLMAPIError:
                 raise
             except Exception as e:
-                reason, hint = classify_llm_error(e, provider_family=_guard_family)
-                if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
-                    _guard.report_block(
-                        _guard_family,
-                        hint.backoff_s or _guard.config.default_block_seconds,
-                        reason.value,
-                    )
-                elif reason in (FailoverReason.AUTH, FailoverReason.BILLING):
-                    logger.error(
-                        "A LiteLLM %s — human attention required: %s",
-                        reason.value,
-                        e,
-                    )
                 logger.exception("LiteLLM API error")
                 raise LLMAPIError(f"LiteLLM API error: {e}") from e
 
@@ -356,10 +386,41 @@ class LiteLLMExecutor(
                     )
                     logger.info("A completion_gate not called; injecting retry at iteration=%d", iteration)
                     continue
-                cleanup_gate_marker(self._anima_dir)
 
                 final_text = message.content or ""
                 _, final_text = strip_thinking_tags(final_text)
+
+                # ── Empty-response recovery ──
+                if EmptyResponseTracker.is_empty(final_text, has_tool_calls=False):
+                    if _empty_tracker.should_reprompt():
+                        messages.append({"role": "assistant", "content": message.content or ""})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": SystemReminderQueue.format_reminder(
+                                    msg_empty_response(),
+                                ),
+                            }
+                        )
+                        logger.info(
+                            "A empty response at iteration=%d; reprompting (%d used)",
+                            iteration,
+                            _empty_tracker.reprompts_used,
+                        )
+                        continue
+                    logger.warning(
+                        "A empty response persisted after reprompts at iteration=%d",
+                        iteration,
+                    )
+                    cleanup_gate_marker(self._anima_dir)
+                    return ExecutionResult(
+                        text="\n".join(all_response_text) or "(empty response)",
+                        tool_call_records=all_tool_records,
+                        usage=usage_acc,
+                        truncated=True,
+                    )
+
+                cleanup_gate_marker(self._anima_dir)
                 all_response_text.append(final_text)
                 logger.debug("A final response at iteration=%d", iteration)
                 final_reminder = self.reminder_queue.drain_formatted()
@@ -401,6 +462,40 @@ class LiteLLMExecutor(
                     _, _content = strip_thinking_tags(_content)
                     all_response_text.append(_content)
                 continue
+
+            # ── Runaway guard: consecutive identical tool-call turns ──
+            _turn_sig = tuple(tool_call_signature(tc["name"], tc["arguments"]) for tc in parsed_calls)
+            _guard_decision = _runaway_guard.observe(_turn_sig)
+            if _guard_decision == RunawayGuard.HALT:
+                logger.warning(
+                    "A runaway tool loop halted at iteration=%d (streak=%d): %s",
+                    iteration,
+                    _runaway_guard.streak,
+                    ", ".join(tc["name"] for tc in parsed_calls),
+                )
+                _force_final = True
+                _final_reminder_sent = True
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": SystemReminderQueue.format_reminder(
+                            msg_tool_loop_halt(count=_runaway_guard.streak),
+                        ),
+                    }
+                )
+                continue
+            if _guard_decision == RunawayGuard.WARN:
+                self.reminder_queue.push_sync(
+                    msg_tool_loop_warning(
+                        tool_names=", ".join(sorted({tc["name"] for tc in parsed_calls})),
+                        count=_runaway_guard.streak,
+                    )
+                )
+                logger.warning(
+                    "A runaway tool loop warning at iteration=%d (streak=%d)",
+                    iteration,
+                    _runaway_guard.streak,
+                )
 
             # Reconstruct assistant message with repaired arguments.
             # model_dump() would preserve malformed JSON that some models
