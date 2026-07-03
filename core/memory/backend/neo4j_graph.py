@@ -470,12 +470,19 @@ class Neo4jGraphBackend(MemoryBackend):
             )
         return self._extractor
 
-    def _resolve_extraction_config(self) -> tuple[str, dict[str, str]]:
+    def _resolve_extraction_config(self) -> tuple[str, dict[str, object]]:
         """Resolve the model and LLM kwargs for extraction.
+
+        Endpoint override fields (api base / api key / extra body) in
+        status.json are deliberately NOT trusted, matching the legacy
+        hardening in ``core.memory.fact_config``: status.json is writable
+        by the anima process itself, so honoring endpoint overrides from it
+        would let a tampered file redirect extraction requests and leak
+        API keys.
 
         Returns:
             ``(model_name, llm_extra)`` where *llm_extra* may contain
-            ``api_base`` and ``api_key`` for custom endpoints (e.g. vLLM).
+            ``timeout`` only.
 
         Resolution order for model:
             1. Per-anima status.json ``extraction_model``
@@ -491,12 +498,6 @@ class Neo4jGraphBackend(MemoryBackend):
             status_path = self._anima_dir / "status.json"
             if status_path.is_file():
                 data = json.loads(status_path.read_text(encoding="utf-8"))
-                if data.get("extraction_api_base"):
-                    llm_extra["api_base"] = data["extraction_api_base"]
-                if data.get("extraction_api_key"):
-                    llm_extra["api_key"] = data["extraction_api_key"]
-                if data.get("extraction_extra_body"):
-                    llm_extra["extra_body"] = data["extraction_extra_body"]
                 if data.get("extraction_timeout"):
                     llm_extra["timeout"] = data["extraction_timeout"]
                 if data.get("extraction_model"):
