@@ -238,6 +238,17 @@ def _get_available_engines() -> list[str]:
     search_path = _expanded_path()
     available = {e for e in _VALID_ENGINES if shutil.which(_ENGINE_COMMANDS[e][0], path=search_path)}
     result = [e for e in priority if e in available]
+
+    # engine_priority が明示設定されている場合はallowlistとして扱う
+    # （2026-07-03: gemini不使用方針。バイナリが在ってもリスト外は使わない）
+    try:
+        from core.config.models import load_config
+
+        if load_config().machine.engine_priority:
+            return result
+    except Exception as exc:
+        logger.debug("Failed to check engine_priority allowlist mode: %s", exc)
+
     for e in sorted(available):
         if e not in result:
             result.append(e)
@@ -810,6 +821,13 @@ def dispatch(name: str, args: dict[str, Any]) -> str:
     if engine not in _VALID_ENGINES:
         return json.dumps(
             {"error": t("machine.invalid_engine", engine=engine, valid=", ".join(sorted(_VALID_ENGINES)))},
+            ensure_ascii=False,
+        )
+
+    allowed = _get_available_engines()
+    if engine not in allowed:
+        return json.dumps(
+            {"error": f"エンジン '{engine}' は現在の運用方針で無効です。使用可能: {', '.join(allowed)}"},
             ensure_ascii=False,
         )
 

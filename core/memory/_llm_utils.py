@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -295,6 +296,8 @@ def _build_sdk_env() -> dict[str, str]:
 
     env: dict[str, str] = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        # サブスクリプションログイン（~/.claude）の解決にHOMEが必要
+        "HOME": os.environ.get("HOME", str(Path.home())),
     }
 
     if auth == "api":
@@ -327,7 +330,9 @@ def _build_sdk_env() -> dict[str, str]:
             if val:
                 env[env_key] = val
     else:
-        env["ANTHROPIC_API_KEY"] = ""
+        # max: サブスクリプションログインを使う。ANTHROPIC_API_KEYは「空でも設定されている」と
+        # CLIがログインより優先して invalid key になるため、キー自体を渡さない（2026-07-03）。
+        env.pop("ANTHROPIC_API_KEY", None)
 
     if cred and cred.base_url:
         env["ANTHROPIC_BASE_URL"] = cred.base_url
@@ -385,33 +390,33 @@ async def _try_agent_sdk(
     from core.execution._sdk_options import _resolve_sdk_cli_path
 
     _cli = _resolve_sdk_cli_path()
-    options = ClaudeAgentOptions(
-        model=sdk_model,
-        system_prompt=system_prompt or "",
-        allowed_tools=[],
-        max_turns=1,
-        **({"cli_path": _cli} if _cli else {}),
-    )
+    # env は ClaudeAgentOptions.env で渡す（SDKが継承環境に上書きマージする）。
+    # 旧実装の ClaudeSDKClient(env=...) は存在しないkwargでTypeError→envなしに
+    # フォールバックしており、_build_sdk_env が適用されていなかった（2026-07-03修正）。
+    options_kwargs: dict[str, Any] = {
+        "model": sdk_model,
+        "system_prompt": system_prompt or "",
+        "allowed_tools": [],
+        "max_turns": 1,
+        "env": env,
+    }
+    if _cli:
+        options_kwargs["cli_path"] = _cli
+    try:
+        options = ClaudeAgentOptions(**options_kwargs)
+    except TypeError:
+        options_kwargs.pop("env", None)
+        options = ClaudeAgentOptions(**options_kwargs)
 
     chunks: list[str] = []
     try:
-        sdk_kwargs: dict[str, Any] = {"options": options}
-        try:
-            async with ClaudeSDKClient(**sdk_kwargs, env=env) as client:
-                await client.query(prompt)
-                async for message in client.receive_response():
-                    if hasattr(message, "content"):
-                        for block in message.content:
-                            if hasattr(block, "text"):
-                                chunks.append(block.text)
-        except TypeError:
-            async with ClaudeSDKClient(**sdk_kwargs) as client:
-                await client.query(prompt)
-                async for message in client.receive_response():
-                    if hasattr(message, "content"):
-                        for block in message.content:
-                            if hasattr(block, "text"):
-                                chunks.append(block.text)
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(prompt)
+            async for message in client.receive_response():
+                if hasattr(message, "content"):
+                    for block in message.content:
+                        if hasattr(block, "text"):
+                            chunks.append(block.text)
     except Exception as e:
         logger.warning("Agent SDK one-shot failed: %s", e)
         return None
