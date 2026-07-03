@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -490,6 +491,147 @@ async def _try_codex_sdk(
                 logger.debug("Failed to close Codex one-shot client", exc_info=True)
 
 
+# Inline retry stays on the live-response budget: a wait longer than this
+# (e.g. a large Retry-After) skips the same-process retry and falls back
+# immediately, while the full block is still reported to the fleet guard.
+_MAX_INLINE_RETRY_WAIT_S = 15.0
+
+
+def _mode_s_realm() -> str:
+    """Resolve the Mode-S auth realm for guard keying (``max`` when unset).
+
+    Mirrors ``_build_sdk_env``'s ``config.anima_defaults.mode_s_auth`` lookup so
+    the one-shot Agent SDK stage is keyed on the same credential pool the SDK
+    actually authenticates against.
+    """
+    try:
+        from core.config import load_config
+
+        return load_config().anima_defaults.mode_s_auth or "max"
+    except Exception:
+        return "max"
+
+
+async def _litellm_stage_with_guard(
+    prompt: str,
+    *,
+    system_prompt: str,
+    resolved_model: str,
+    max_tokens: int,
+    llm_kwargs: dict[str, Any],
+    log_prefix: str,
+    guard: Any,
+    family: str,
+    guard_key: str,
+) -> tuple[str, str | None]:
+    """Run the LiteLLM one-shot stage under the fleet rate guard.
+
+    ``guard_key`` is the ``<family>:api`` realm key used for guard queries and
+    reports; ``family`` is the coarse family passed to the classifier.
+
+    Returns ``(outcome, text)`` where ``outcome`` is:
+      - ``"success"`` — ``text`` is the completion.
+      - ``"terminal"`` — caller must return ``None`` (content-policy block; no
+        fallback, see Key Decision 7).
+      - ``"fallback"`` — caller proceeds to the next backend (current
+        blind-fallback behavior; used for skipped/blocked/rate/unknown paths).
+    """
+    from core.execution.backoff import decorrelated_jitter
+    from core.execution.error_classifier import FailoverReason, classify_llm_error
+
+    blocked = guard.blocked_remaining(guard_key)
+    if blocked > 0:
+        logger.info("%s LiteLLM skipped: %s rate-guarded for %.0fs", log_prefix, guard_key, blocked)
+        return "fallback", None
+
+    try:
+        result = await _try_litellm(
+            prompt,
+            system_prompt=system_prompt,
+            model=resolved_model,
+            max_tokens=max_tokens,
+            llm_kwargs=llm_kwargs,
+        )
+        if result:
+            return "success", result
+        return "fallback", None
+    except Exception as exc:
+        error = exc
+        reason, hint = classify_llm_error(exc, provider_family=family)
+
+    if reason is FailoverReason.CONTENT_POLICY:
+        logger.warning("%s LiteLLM one-shot content-policy block, not falling back: %s", log_prefix, error)
+        return "terminal", None
+
+    if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
+        cfg = guard.config
+        # Report the full block to the fleet (report_block clamps to the max).
+        guard.report_block(guard_key, hint.backoff_s or cfg.default_block_seconds, reason.value)
+        # Compute the wait once; retry in-process only when it fits the live
+        # budget, otherwise fall back immediately.
+        wait_s = hint.backoff_s if hint.backoff_s is not None else decorrelated_jitter(0.0)
+        if hint.retryable and wait_s <= _MAX_INLINE_RETRY_WAIT_S:
+            await asyncio.sleep(wait_s)
+            try:
+                result = await _try_litellm(
+                    prompt,
+                    system_prompt=system_prompt,
+                    model=resolved_model,
+                    max_tokens=max_tokens,
+                    llm_kwargs=llm_kwargs,
+                )
+                if result:
+                    return "success", result
+            except Exception as retry_exc:
+                retry_reason, retry_hint = classify_llm_error(retry_exc, provider_family=family)
+                if retry_reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
+                    guard.report_block(
+                        guard_key,
+                        retry_hint.backoff_s or cfg.default_block_seconds,
+                        retry_reason.value,
+                    )
+                logger.warning(
+                    "%s LiteLLM one-shot rate-limited on retry (%s), trying fallback",
+                    log_prefix,
+                    retry_reason.value,
+                )
+        else:
+            logger.info(
+                "%s LiteLLM one-shot %s; block %.0fs exceeds inline budget, trying fallback",
+                log_prefix,
+                reason.value,
+                wait_s,
+            )
+        return "fallback", None
+
+    if reason in (FailoverReason.AUTH, FailoverReason.BILLING):
+        logger.error(
+            "%s LiteLLM one-shot %s — human attention required: %s",
+            log_prefix,
+            reason.value,
+            error,
+        )
+        return "fallback", None
+
+    logger.warning("%s LiteLLM one-shot failed (%s: %s), trying fallback", log_prefix, reason.value, error)
+    return "fallback", None
+
+
+def _sdk_stage_guarded(guard: Any, stage_key: str, log_prefix: str, backend: str) -> bool:
+    """Return True when the SDK *backend* should be skipped (realm guarded).
+
+    ``stage_key`` is the backend's own ``<family>:<realm>`` key: the Agent SDK
+    uses the Mode-S auth realm and the Codex SDK the ``codex`` realm, so an
+    API-key 429 does not skip an independently-authenticated SDK, while calls
+    sharing a realm still protect each other.
+    """
+    blocked = guard.blocked_remaining(stage_key)
+    if blocked > 0:
+        logger.info("%s %s skipped: %s rate-guarded for %.0fs", log_prefix, backend, stage_key, blocked)
+        return True
+    return False
+
+
 async def one_shot_completion(
     prompt: str,
     *,
@@ -518,22 +660,33 @@ async def one_shot_completion(
     llm_kwargs = get_llm_kwargs_for_model(model, credential=credential)
     resolved_model = llm_kwargs["model"]
 
-    # 1. Try LiteLLM
-    try:
-        result = await _try_litellm(
-            prompt,
-            system_prompt=system_prompt,
-            model=resolved_model,
-            max_tokens=max_tokens,
-            llm_kwargs=llm_kwargs,
-        )
-        if result:
-            return result
-    except Exception as e:
-        logger.warning("LiteLLM one-shot failed (%s), trying Agent SDK fallback", e)
+    from core.execution.error_classifier import guard_key, litellm_realm_of, provider_family_of
+    from core.execution.rate_guard import get_rate_guard
 
-    # 2. Try Agent SDK (Anthropic models only)
-    if _is_anthropic_model(resolved_model):
+    guard = get_rate_guard()
+    family = provider_family_of(resolved_model)
+
+    # 1. Try LiteLLM (under the fleet rate guard, keyed on the LiteLLM realm)
+    outcome, text = await _litellm_stage_with_guard(
+        prompt,
+        system_prompt=system_prompt,
+        resolved_model=resolved_model,
+        max_tokens=max_tokens,
+        llm_kwargs=llm_kwargs,
+        log_prefix="one-shot",
+        guard=guard,
+        family=family,
+        guard_key=guard_key(family, litellm_realm_of(resolved_model)),
+    )
+    if outcome == "success":
+        return text
+    if outcome == "terminal":
+        return None
+
+    # 2. Try Agent SDK (Anthropic models only), unless the Mode-S realm is guarded.
+    if _is_anthropic_model(resolved_model) and not _sdk_stage_guarded(
+        guard, guard_key(family, _mode_s_realm()), "one-shot", "Agent SDK"
+    ):
         try:
             return await _try_agent_sdk(
                 prompt,
@@ -544,7 +697,9 @@ async def one_shot_completion(
         except Exception as e:
             logger.warning("Agent SDK one-shot fallback also failed: %s", e)
 
-    if _is_codex_model(resolved_model):
+    if _is_codex_model(resolved_model) and not _sdk_stage_guarded(
+        guard, guard_key(family, "codex"), "one-shot", "Codex SDK"
+    ):
         try:
             return await _try_codex_sdk(
                 prompt,
@@ -570,20 +725,31 @@ async def one_shot_completion_with_model_config(
     llm_kwargs = get_llm_kwargs_for_model_config(model_config)
     resolved_model = llm_kwargs["model"]
 
-    try:
-        result = await _try_litellm(
-            prompt,
-            system_prompt=system_prompt,
-            model=resolved_model,
-            max_tokens=max_tokens,
-            llm_kwargs=llm_kwargs,
-        )
-        if result:
-            return result
-    except Exception as e:
-        logger.warning("LiteLLM active-model one-shot failed (%s), trying SDK fallback", e)
+    from core.execution.error_classifier import guard_key, litellm_realm_of, provider_family_of
+    from core.execution.rate_guard import get_rate_guard
 
-    if _is_anthropic_model(resolved_model):
+    guard = get_rate_guard()
+    family = provider_family_of(resolved_model)
+
+    outcome, text = await _litellm_stage_with_guard(
+        prompt,
+        system_prompt=system_prompt,
+        resolved_model=resolved_model,
+        max_tokens=max_tokens,
+        llm_kwargs=llm_kwargs,
+        log_prefix="active-model one-shot",
+        guard=guard,
+        family=family,
+        guard_key=guard_key(family, litellm_realm_of(resolved_model)),
+    )
+    if outcome == "success":
+        return text
+    if outcome == "terminal":
+        return None
+
+    if _is_anthropic_model(resolved_model) and not _sdk_stage_guarded(
+        guard, guard_key(family, _mode_s_realm()), "active-model one-shot", "Agent SDK"
+    ):
         try:
             return await _try_agent_sdk(
                 prompt,
@@ -594,7 +760,9 @@ async def one_shot_completion_with_model_config(
         except Exception as e:
             logger.warning("Agent SDK active-model one-shot fallback also failed: %s", e)
 
-    if _is_codex_model(resolved_model):
+    if _is_codex_model(resolved_model) and not _sdk_stage_guarded(
+        guard, guard_key(family, "codex"), "active-model one-shot", "Codex SDK"
+    ):
         try:
             return await _try_codex_sdk(
                 prompt,
