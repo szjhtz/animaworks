@@ -1220,6 +1220,23 @@ class PendingTaskExecutor:
                 reply_to = reply_to.get("name")
             elif not isinstance(reply_to, str):
                 reply_to = None
+        # Skip notification when the result carries no information: the
+        # completion is already tracked in the task queue / activity log,
+        # and an empty echo only costs the recipient a full LLM cycle.
+        if reply_to:
+            _summary_body = (result_summary or "").strip()
+            if (
+                not _summary_body
+                or _summary_body == t("pending_executor.task_completed")
+                or _summary_body.startswith("[Session interrupted")
+            ):
+                logger.info(
+                    "[%s] Skipping empty task completion notification for %s (task %s)",
+                    self._anima_name,
+                    reply_to,
+                    task_id,
+                )
+                reply_to = None
         if reply_to:
             try:
                 notify_text = load_prompt(
