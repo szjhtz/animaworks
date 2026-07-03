@@ -515,16 +515,54 @@ class PendingTaskExecutor:
     # ── Watcher loop ─────────────────────────────────────────
 
     @staticmethod
-    def _recover_processing(processing_dir: Path, failed_dir: Path) -> None:
-        """Move orphaned files from processing/ to failed/ on startup."""
+    def _recover_processing(
+        processing_dir: Path,
+        failed_dir: Path,
+        anima_dir: Path | None = None,
+    ) -> None:
+        """Move orphaned files from processing/ to failed/ on startup.
+
+        When *anima_dir* is provided, the matching Layer2 task_queue entry is
+        also transitioned to ``failed`` so a task interrupted mid-execution does
+        not linger in ``in_progress`` forever (the JSONL log is otherwise never
+        told the process died).
+        """
         if not processing_dir.exists():
             return
+        _ACTIVE = {"pending", "in_progress", "blocked", "delegated"}
         for orphan in processing_dir.glob("*.json"):
+            task_id = ""
+            if anima_dir is not None:
+                try:
+                    task_desc = json.loads(orphan.read_text(encoding="utf-8"))
+                    task_id = (task_desc.get("task_id") or "").strip() if isinstance(task_desc, dict) else ""
+                except (json.JSONDecodeError, OSError):
+                    task_id = ""
+                if not task_id:
+                    task_id = orphan.stem
             try:
                 orphan.rename(failed_dir / orphan.name)
                 logger.warning("Recovered orphaned processing task: %s", orphan.name)
             except OSError:
                 logger.exception("Failed to recover orphaned task: %s", orphan.name)
+                continue
+            if anima_dir is not None and task_id:
+                try:
+                    from core.memory.task_queue import TaskQueueManager
+
+                    manager = TaskQueueManager(anima_dir)
+                    entry = manager.get_task_by_id(task_id)
+                    if entry is not None and entry.status in _ACTIVE:
+                        manager.update_status(
+                            task_id,
+                            "failed",
+                            summary="FAILED: recovered orphaned processing task on restart",
+                        )
+                except Exception:
+                    logger.exception(
+                        "Failed to sync Layer2 task_queue for recovered task: %s",
+                        task_id,
+                    )
 
     async def watcher_loop(self) -> None:
         """Watch state/background_tasks/pending/ for submitted tasks.
@@ -554,8 +592,8 @@ class PendingTaskExecutor:
         llm_suppressed_dir = llm_pending_dir / "suppressed"
         llm_suppressed_dir.mkdir(exist_ok=True)
 
-        self._recover_processing(cmd_processing_dir, cmd_failed_dir)
-        self._recover_processing(llm_processing_dir, llm_failed_dir)
+        self._recover_processing(cmd_processing_dir, cmd_failed_dir, self._anima_dir)
+        self._recover_processing(llm_processing_dir, llm_failed_dir, self._anima_dir)
 
         logger.info("Pending task watcher started for %s", self._anima_name)
 
