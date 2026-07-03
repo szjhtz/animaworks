@@ -660,13 +660,13 @@ async def one_shot_completion(
     llm_kwargs = get_llm_kwargs_for_model(model, credential=credential)
     resolved_model = llm_kwargs["model"]
 
-    from core.execution.error_classifier import guard_key, provider_family_of
+    from core.execution.error_classifier import guard_key, litellm_realm_of, provider_family_of
     from core.execution.rate_guard import get_rate_guard
 
     guard = get_rate_guard()
     family = provider_family_of(resolved_model)
 
-    # 1. Try LiteLLM (under the fleet rate guard, keyed on the API realm)
+    # 1. Try LiteLLM (under the fleet rate guard, keyed on the LiteLLM realm)
     outcome, text = await _litellm_stage_with_guard(
         prompt,
         system_prompt=system_prompt,
@@ -676,7 +676,7 @@ async def one_shot_completion(
         log_prefix="one-shot",
         guard=guard,
         family=family,
-        guard_key=guard_key(family, "api"),
+        guard_key=guard_key(family, litellm_realm_of(resolved_model)),
     )
     if outcome == "success":
         return text
@@ -725,7 +725,7 @@ async def one_shot_completion_with_model_config(
     llm_kwargs = get_llm_kwargs_for_model_config(model_config)
     resolved_model = llm_kwargs["model"]
 
-    from core.execution.error_classifier import guard_key, provider_family_of
+    from core.execution.error_classifier import guard_key, litellm_realm_of, provider_family_of
     from core.execution.rate_guard import get_rate_guard
 
     guard = get_rate_guard()
@@ -740,7 +740,7 @@ async def one_shot_completion_with_model_config(
         log_prefix="active-model one-shot",
         guard=guard,
         family=family,
-        guard_key=guard_key(family, "api"),
+        guard_key=guard_key(family, litellm_realm_of(resolved_model)),
     )
     if outcome == "success":
         return text

@@ -124,6 +124,21 @@ def guard_key(family: str, realm: str) -> str:
     return f"{family}:{realm}"
 
 
+def litellm_realm_of(model: str) -> str:
+    """Derive the credential realm for a LiteLLM call from the model prefix.
+
+    Bedrock and Vertex calls authenticate against distinct cloud credentials
+    (not the direct API key), so a 429 there must be tracked separately from
+    the ``api`` realm.
+    """
+    m = (model or "").strip().lower()
+    if m.startswith(("bedrock/", "bedrock-")):
+        return "bedrock"
+    if m.startswith("vertex_ai/"):
+        return "vertex"
+    return "api"
+
+
 def provider_family_of(model: str) -> str:
     """Map a model identifier to its provider family for rate-guard keying.
 
@@ -541,5 +556,6 @@ __all__ = [
     "RecoveryHint",
     "classify_llm_error",
     "guard_key",
+    "litellm_realm_of",
     "provider_family_of",
 ]

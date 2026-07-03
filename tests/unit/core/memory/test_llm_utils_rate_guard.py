@@ -195,6 +195,30 @@ async def test_codex_realm_block_skips_codex_sdk(tmp_path: Path) -> None:
     mock_codex.assert_not_called()        # openai:codex realm blocked
 
 
+@pytest.mark.parametrize(
+    ("model", "realm"),
+    [
+        ("bedrock/jp.anthropic.claude-sonnet-4-6", "bedrock"),
+        ("vertex_ai/claude-sonnet-4-6", "vertex"),
+    ],
+)
+async def test_litellm_realm_recorded_from_model_prefix(tmp_path: Path, model: str, realm: str) -> None:
+    # A bedrock/vertex 429 is recorded on its own realm and does not block the
+    # ``anthropic:api`` (direct API key) realm.
+    guard = _make_guard(tmp_path)
+    mock_litellm = AsyncMock(side_effect=_ApiError("Too Many Requests", status_code=429))
+    with (
+        patch("core.memory._llm_utils.get_llm_kwargs_for_model", return_value={"model": model}),
+        patch("core.memory._llm_utils._try_litellm", new=mock_litellm),
+        patch("core.memory._llm_utils._try_agent_sdk", new=AsyncMock(return_value="sdk")),
+        patch("core.execution.rate_guard.get_rate_guard", return_value=guard),
+    ):
+        await llm_utils.one_shot_completion("hi", model=model)
+
+    assert guard.blocked_remaining(f"anthropic:{realm}") > 0
+    assert guard.blocked_remaining("anthropic:api") == 0.0
+
+
 async def test_disabled_guard_does_not_record_block(tmp_path: Path) -> None:
     guard = _make_guard(tmp_path, enabled=False)
     with (

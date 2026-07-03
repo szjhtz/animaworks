@@ -12,6 +12,7 @@ from core.execution.error_classifier import (
     FailoverReason,
     classify_llm_error,
     guard_key,
+    litellm_realm_of,
     provider_family_of,
 )
 
@@ -77,6 +78,20 @@ class TestGuardKey:
     def test_api_and_mode_s_realms_are_distinct(self) -> None:
         # The whole point of the realm split: same family, different keys.
         assert guard_key("anthropic", "api") != guard_key("anthropic", "max")
+
+
+class TestLitellmRealm:
+    def test_bedrock_prefixes(self) -> None:
+        assert litellm_realm_of("bedrock/jp.anthropic.claude-sonnet-4-6") == "bedrock"
+        assert litellm_realm_of("bedrock-anthropic.claude-sonnet-4-6") == "bedrock"
+
+    def test_vertex_prefix(self) -> None:
+        assert litellm_realm_of("vertex_ai/claude-sonnet-4-6") == "vertex"
+
+    def test_default_api_realm(self) -> None:
+        assert litellm_realm_of("anthropic/claude-sonnet-4-6") == "api"
+        assert litellm_realm_of("openai/gpt-4.1") == "api"
+        assert litellm_realm_of("") == "api"
 
 
 # ── classification matrix (12 reasons) ──────────────────────────────────────
