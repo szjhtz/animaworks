@@ -493,13 +493,17 @@ class Neo4jGraphBackend(MemoryBackend):
         """
         import json
 
+        from core.memory.fact_config import _coerce_timeout_seconds
+
         llm_extra: dict[str, object] = {}
         try:
             status_path = self._anima_dir / "status.json"
             if status_path.is_file():
                 data = json.loads(status_path.read_text(encoding="utf-8"))
                 if data.get("extraction_timeout"):
-                    llm_extra["timeout"] = data["extraction_timeout"]
+                    timeout = _coerce_timeout_seconds(data["extraction_timeout"], 0)
+                    if timeout > 0:
+                        llm_extra["timeout"] = timeout
                 if data.get("extraction_model"):
                     return data["extraction_model"], llm_extra
                 if data.get("background_model"):
