@@ -85,13 +85,23 @@ class AnimaRunner:
 
     @staticmethod
     def _conversation_contains_recovery(conv_memory: Any, recovered_text: str, saved_text: str) -> bool:
-        """Return True when the recovered assistant text is already stored."""
+        """Return True when the recovered assistant text is already stored.
+
+        Dedup is intentionally marker-independent. If the streaming response
+        completed and was saved cleanly to conversation memory just before the
+        crash — but the journal was not yet deleted — the stored assistant turn
+        carries no interruption marker. Requiring the marker (the legacy
+        behavior) would miss that turn and append a duplicate. We therefore also
+        treat the recovery as already present when the recovered text matches
+        the most recent assistant turn's content with the marker stripped.
+        """
         if not recovered_text:
             return False
         try:
             state = conv_memory.load()
             marker = t("anima.response_interrupted")
-            for turn in getattr(state, "turns", []):
+            turns = list(getattr(state, "turns", []))
+            for turn in turns:
                 if getattr(turn, "role", "") != "assistant":
                     continue
                 content = getattr(turn, "content", "") or ""
@@ -99,6 +109,21 @@ class AnimaRunner:
                     return True
                 if recovered_text in content and marker in content:
                     return True
+            # Marker-independent check against the most recent assistant turn:
+            # a clean save that completed before the journal was deleted stores
+            # the full response without the interruption marker. Restrict this to
+            # the tail turn to avoid falsely matching unrelated earlier turns.
+            recovered_stripped = recovered_text.strip()
+            for turn in reversed(turns):
+                if getattr(turn, "role", "") != "assistant":
+                    continue
+                content = getattr(turn, "content", "") or ""
+                content_wo_marker = content.replace(marker, "").strip()
+                if recovered_stripped and (
+                    content_wo_marker == recovered_stripped or recovered_stripped in content_wo_marker
+                ):
+                    return True
+                break
         except Exception:
             logger.debug("Failed to inspect conversation recovery state", exc_info=True)
         return False
