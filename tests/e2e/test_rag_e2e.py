@@ -422,8 +422,9 @@ def test_e2e_incremental_index_and_graph(anima_dir, vector_store, indexer, retri
     assert chunks_added > 0, "New file should produce chunks"
 
     # Rebuild the graph to pick up the new file. Incremental graph update
-    # was removed with the file watcher (2026-07); the daily indexing cron
-    # performs this rebuild in production.
+    # was removed with the file watcher (2026-07); in production the daily
+    # indexing scheduler calls rebuild_graph_cache() to refresh the persisted
+    # graph cache (already-loaded in-process graphs refresh on restart).
     graph.build_graph("test_anima", knowledge_dir)
 
     assert graph.graph.number_of_nodes() == initial_nodes + 1

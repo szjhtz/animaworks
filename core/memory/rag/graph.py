@@ -729,3 +729,65 @@ def create_knowledge_graph(
     graph = KnowledgeGraph(vector_store, indexer)
     graph.build_graph(anima_name, knowledge_dir, memory_dirs=memory_dirs)
     return graph
+
+
+def rebuild_graph_cache(
+    anima_name: str,
+    anima_dir: Path,
+    vector_store,
+    indexer,
+) -> bool:
+    """Rebuild and persist the knowledge graph cache for an anima.
+
+    Called by the daily indexing scheduler so that
+    ``vectordb/knowledge_graph.json`` reflects newly indexed memories.
+    Retrievers load this cache on (re)initialization; a graph already
+    loaded in a long-running process stays as-is until that process
+    restarts or re-initializes its retriever.
+
+    Returns:
+        True if the cache was rebuilt and saved, False if skipped
+        (graph cache disabled or knowledge directory missing).
+    """
+    implicit_link_threshold = IMPLICIT_LINK_THRESHOLD
+    entity_aware_graph_enabled = False
+    graph_entity_edge_cap = 8
+    graph_inverse_fan_enabled = True
+    graph_recency_weight_enabled = True
+    memory_types: list[str] = ["knowledge", "episodes"]
+    try:
+        from core.config import load_config
+
+        rag_cfg = load_config().rag
+        if not bool(getattr(rag_cfg, "graph_cache_enabled", True)):
+            return False
+        implicit_link_threshold = float(getattr(rag_cfg, "implicit_link_threshold", implicit_link_threshold))
+        entity_aware_graph_enabled = bool(getattr(rag_cfg, "entity_aware_graph_enabled", False))
+        graph_entity_edge_cap = int(getattr(rag_cfg, "graph_entity_edge_cap", 8) or 8)
+        graph_inverse_fan_enabled = bool(getattr(rag_cfg, "graph_inverse_fan_enabled", True))
+        graph_recency_weight_enabled = bool(getattr(rag_cfg, "graph_recency_weight_enabled", True))
+        memory_types = list(getattr(rag_cfg, "spreading_memory_types", memory_types) or memory_types)
+    except Exception:
+        logger.debug("Config load failed for graph cache rebuild; using defaults", exc_info=True)
+
+    knowledge_dir = anima_dir / "knowledge"
+    if not knowledge_dir.is_dir():
+        return False
+
+    memory_dirs = {mt: anima_dir / mt for mt in memory_types if mt != "knowledge" and (anima_dir / mt).is_dir()}
+
+    graph = KnowledgeGraph(vector_store, indexer)
+    graph.build_graph(
+        anima_name,
+        knowledge_dir,
+        memory_dirs=memory_dirs,
+        implicit_link_threshold=implicit_link_threshold,
+        entity_aware_graph_enabled=entity_aware_graph_enabled,
+        graph_entity_edge_cap=graph_entity_edge_cap,
+        graph_inverse_fan_enabled=graph_inverse_fan_enabled,
+        graph_recency_weight_enabled=graph_recency_weight_enabled,
+    )
+    cache_dir = anima_dir / "vectordb"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    graph.save_graph(cache_dir)
+    return True

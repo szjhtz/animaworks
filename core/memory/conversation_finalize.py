@@ -382,13 +382,23 @@ async def finalize_session(
         )
         if error:
             logger.warning("Finalization compression fallback details: %s", error)
-        save_fn()
+        compression_succeeded = True
     except Exception:
         # The finalization cursor was already advanced and persisted above, so
         # no duplicate episode can result. The raw turns remain and will be
         # folded into compressed_summary on the next successful run. Do not
         # increment compressed_turn_count while the raw turns are still present.
+        compression_succeeded = False
         logger.warning("Compression failed during finalization; keeping raw turns")
+
+    if compression_succeeded:
+        try:
+            save_fn()
+        except Exception:
+            # Persistence failure is distinct from compression failure: the
+            # in-memory state was compressed but never written, so the raw
+            # turns remain on disk and are retried on the next run.
+            logger.exception("Failed to persist compressed conversation state after finalization")
 
     if parsed.current_status:
         _maybe_update_idle_current_state(memory_mgr, parsed.current_status)

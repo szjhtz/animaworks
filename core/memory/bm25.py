@@ -16,6 +16,7 @@ Indexes recent activity entries and ranks them against a query using
 import json
 import logging
 import math
+import os
 import re
 import time
 from collections import Counter
@@ -125,6 +126,7 @@ LONGTERM_BM25_INDEX_FILE = "bm25_longterm_index.json"
 LONGTERM_BM25_DIRTY_FILE = "bm25_longterm_index.dirty"
 LONGTERM_BM25_REBUILD_MARKER_FILE = "bm25_longterm_index.rebuild"
 LONGTERM_BM25_REBUILD_COOLDOWN_SECONDS = 600.0
+LONGTERM_BM25_REBUILD_LOCK_STALE_SECONDS = 1800.0
 LONGTERM_BM25_MEMORY_TYPES: tuple[str, ...] = ("knowledge", "episodes", "procedures")
 LONGTERM_BM25_SCHEMA_VERSION = 3
 _LONGTERM_BM25_CACHE: dict[Path, tuple[int, int, dict[str, Any]]] = {}
@@ -312,18 +314,48 @@ def maybe_rebuild_dirty_longterm_bm25(
         last_attempt = None
     if last_attempt is not None and (now - last_attempt) < cooldown_seconds:
         return False
-    # Record the attempt before rebuilding so a failing rebuild still respects
-    # the cooldown instead of retrying on every subsequent search.
+    # Single-flight: concurrent searches must not stack heavy rebuilds. The
+    # O_EXCL lock file admits one rebuilder; others keep serving the stale
+    # index. A lock left behind by a crashed process is stolen after
+    # LONGTERM_BM25_REBUILD_LOCK_STALE_SECONDS.
+    lock_path = marker.with_name(marker.name + ".lock")
+    lock_fd = _acquire_rebuild_lock(lock_path, now)
+    if lock_fd is None:
+        return False
     try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(marker, f"{now}\n")
+        # Record the attempt before rebuilding so a failing rebuild still
+        # respects the cooldown instead of retrying on every subsequent search.
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(marker, f"{now}\n")
+        except OSError:
+            logger.debug("Failed to write BM25 rebuild cooldown marker for %s", anima_dir, exc_info=True)
+        try:
+            rebuild_longterm_bm25_index(anima_dir)
+        except Exception:
+            logger.warning("On-demand long-term BM25 rebuild failed for %s", anima_dir.name, exc_info=True)
+        return True
+    finally:
+        os.close(lock_fd)
+        lock_path.unlink(missing_ok=True)
+
+
+def _acquire_rebuild_lock(lock_path: Path, now: float) -> int | None:
+    """Acquire the single-flight rebuild lock; return an fd or None."""
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            if (now - lock_path.stat().st_mtime) < LONGTERM_BM25_REBUILD_LOCK_STALE_SECONDS:
+                return None
+            lock_path.unlink()
+            return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError:
+            return None
     except OSError:
-        logger.debug("Failed to write BM25 rebuild cooldown marker for %s", anima_dir, exc_info=True)
-    try:
-        rebuild_longterm_bm25_index(anima_dir)
-    except Exception:
-        logger.warning("On-demand long-term BM25 rebuild failed for %s", anima_dir.name, exc_info=True)
-    return True
+        logger.debug("Failed to acquire BM25 rebuild lock at %s", lock_path, exc_info=True)
+        return None
 
 
 def rebuild_longterm_bm25_index(

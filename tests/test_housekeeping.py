@@ -1062,3 +1062,73 @@ class TestRuntimeBloatRetention:
         assert not old_log.exists()
         assert recent_log.exists()
         assert memory_file.exists()
+
+
+class TestEpisodeifyReadErrors:
+    """R3: transient read errors must not discard recoverable sessions."""
+
+    def test_json_decode_error_is_deletable(self, tmp_path: Path):
+        from core.memory.housekeeping import _episodeify_abandoned_session
+
+        state = tmp_path / "session_state.json"
+        state.write_text("{not json", encoding="utf-8")
+        assert _episodeify_abandoned_session(tmp_path, state) is True
+
+    def test_os_error_defers_deletion(self, tmp_path: Path, monkeypatch):
+        from core.memory.housekeeping import _episodeify_abandoned_session
+
+        state = tmp_path / "session_state.json"
+        state.write_text("{}", encoding="utf-8")
+
+        original_read = Path.read_text
+
+        def flaky_read(self, *args, **kwargs):
+            if self.name == "session_state.json":
+                raise OSError(24, "Too many open files")
+            return original_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", flaky_read)
+        assert _episodeify_abandoned_session(tmp_path, state) is False
+        assert state.exists()
+
+
+class TestEpisodifiedUnlinkFailure:
+    """R6: unlink failure after episodify must not re-episodify next run."""
+
+    def test_unlink_failure_renames_state_file(self, tmp_path: Path, monkeypatch):
+        from core.memory.housekeeping import _cleanup_shortterm
+
+        chat_dir = tmp_path / "alice" / "shortterm" / "chat"
+        chat_dir.mkdir(parents=True)
+        state_file = chat_dir / "session_state.json"
+        state_file.write_text(
+            json.dumps({"accumulated_response": "内容"}),
+            encoding="utf-8",
+        )
+        old_time = time.time() - (14 * 86400)
+        os.utime(state_file, (old_time, old_time))
+
+        class _FakeMgr:
+            def __init__(self, _anima_dir):
+                pass
+
+            def append_episode(self, entry, *, origin=""):
+                pass
+
+        monkeypatch.setattr("core.memory.manager.MemoryManager", _FakeMgr)
+
+        original_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name == "session_state.json":
+                raise OSError(13, "Permission denied")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+        result = _cleanup_shortterm(tmp_path, retention_days=7)
+        assert result["episodified_sessions"] == 1
+        assert result["deleted_files"] == 0
+        renamed = chat_dir / "session_state.json.episodified.bak"
+        assert renamed.exists()
+        assert not state_file.exists()

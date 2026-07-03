@@ -870,3 +870,32 @@ def test_expand_results_no_content_unavailable(temp_anima_dir):
 
     for result in expanded:
         assert "[Content unavailable" not in result.content
+
+
+def test_rebuild_graph_cache_writes_cache(temp_anima_dir):
+    """R1: rebuild_graph_cache persists vectordb/knowledge_graph.json."""
+    from core.memory.rag.graph import GRAPH_CACHE_FILE, rebuild_graph_cache
+
+    rebuilt = rebuild_graph_cache(
+        "test_anima",
+        temp_anima_dir,
+        MockVectorStore(),
+        MockIndexer(),
+    )
+
+    assert rebuilt is True
+    cache_path = temp_anima_dir / "vectordb" / GRAPH_CACHE_FILE
+    assert cache_path.is_file()
+    # A second rebuild refreshes the cache file in place.
+    before = cache_path.read_text(encoding="utf-8")
+    (temp_anima_dir / "knowledge" / "file_new.md").write_text("# New\n\nLinks to [[file1]].\n")
+    assert rebuild_graph_cache("test_anima", temp_anima_dir, MockVectorStore(), MockIndexer()) is True
+    after = cache_path.read_text(encoding="utf-8")
+    assert "file_new" in after and "file_new" not in before
+
+
+def test_rebuild_graph_cache_missing_knowledge_dir(tmp_path):
+    """R1: missing knowledge/ dir is a no-op skip."""
+    from core.memory.rag.graph import rebuild_graph_cache
+
+    assert rebuild_graph_cache("x", tmp_path, MockVectorStore(), MockIndexer()) is False

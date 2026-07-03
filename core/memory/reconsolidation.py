@@ -416,7 +416,15 @@ class ReconsolidationEngine:
         archive_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        dest = archive_dir / f"{file_path.stem}_v{version}_{timestamp}{file_path.suffix}"
+        # Flatten the path relative to the anima dir into the archive name so
+        # same-named files in different subdirectories (procedures/a/deploy.md
+        # vs procedures/b/deploy.md) cannot collide within the same second.
+        try:
+            rel = file_path.relative_to(self.anima_dir)
+            rel_stem = "__".join([*rel.parts[:-1], file_path.stem])
+        except ValueError:
+            rel_stem = file_path.stem
+        dest = archive_dir / f"{rel_stem}_v{version}_{timestamp}{file_path.suffix}"
         shutil.copy2(str(file_path), str(dest))
 
         logger.debug(

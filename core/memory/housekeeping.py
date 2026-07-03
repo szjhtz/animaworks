@@ -799,9 +799,18 @@ def _episodeify_abandoned_session(anima_dir: Path, json_path: Path) -> bool:
 
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        # Corrupt/unreadable state carries no recoverable memory.
+    except json.JSONDecodeError:
+        # Truly corrupt state carries no recoverable memory.
         return True
+    except OSError:
+        # Transient I/O failure (e.g. FD exhaustion): the content may still be
+        # recoverable, so keep the file and retry on the next run.
+        logger.warning(
+            "Failed to read abandoned shortterm session %s; deferring deletion",
+            json_path,
+            exc_info=True,
+        )
+        return False
     if not isinstance(data, dict):
         return True
 
@@ -885,15 +894,37 @@ def _cleanup_shortterm(
                     logger.warning("Failed to stat shortterm file: %s", f)
                     continue
                 # Preserve abandoned chat sessions as episodes before deletion.
+                episodified = False
                 if sub == "chat" and f.name == "session_state.json":
                     if not _episodeify_abandoned_session(anima_dir, f):
                         continue  # keep the file; retry next run
-                    total_episodified += 1
+                    episodified = True
                 try:
                     f.unlink()
                     total_deleted += 1
+                    if episodified:
+                        total_episodified += 1
                 except OSError:
-                    logger.warning("Failed to delete shortterm file: %s", f)
+                    if episodified:
+                        # Already saved as an episode: rename so the next run
+                        # does not episodify it again (duplicate episode). The
+                        # renamed file keeps its expired mtime and is swept by
+                        # the generic deletion above on a later run.
+                        try:
+                            f.rename(f.with_name(f.name + ".episodified.bak"))
+                            total_episodified += 1
+                            logger.warning(
+                                "Failed to delete episodified shortterm state; renamed for later sweep: %s",
+                                f,
+                            )
+                        except OSError:
+                            logger.error(
+                                "Failed to delete or rename episodified shortterm state %s; "
+                                "a duplicate episode may result on the next run",
+                                f,
+                            )
+                    else:
+                        logger.warning("Failed to delete shortterm file: %s", f)
 
     if total_deleted or total_episodified:
         logger.info(

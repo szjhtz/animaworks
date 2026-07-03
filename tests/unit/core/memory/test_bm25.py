@@ -507,3 +507,57 @@ def test_longterm_bm25_rejects_poisoned_index_content(tmp_path: Path) -> None:
     )
 
     assert hits == []
+
+
+class TestBM25RebuildSingleFlight:
+    """R5: concurrent dirty rebuilds must not stack."""
+
+    def _mark_dirty(self, anima_dir):
+        from core.memory.bm25 import mark_longterm_bm25_dirty
+
+        mark_longterm_bm25_dirty(anima_dir)
+
+    def test_lock_held_skips_rebuild(self, tmp_path, monkeypatch):
+        from core.memory import bm25 as bm25_mod
+        from core.memory.bm25 import (
+            longterm_bm25_rebuild_marker_path,
+            maybe_rebuild_dirty_longterm_bm25,
+        )
+
+        self._mark_dirty(tmp_path)
+        marker = longterm_bm25_rebuild_marker_path(tmp_path)
+        lock = marker.with_name(marker.name + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("held", encoding="utf-8")  # fresh lock (mtime now)
+
+        called = []
+        monkeypatch.setattr(bm25_mod, "rebuild_longterm_bm25_index", lambda d: called.append(d))
+
+        assert maybe_rebuild_dirty_longterm_bm25(tmp_path) is False
+        assert called == []
+        assert lock.exists()  # not stolen
+
+    def test_stale_lock_is_stolen(self, tmp_path, monkeypatch):
+        import os as _os
+        import time as _time
+
+        from core.memory import bm25 as bm25_mod
+        from core.memory.bm25 import (
+            longterm_bm25_rebuild_marker_path,
+            maybe_rebuild_dirty_longterm_bm25,
+        )
+
+        self._mark_dirty(tmp_path)
+        marker = longterm_bm25_rebuild_marker_path(tmp_path)
+        lock = marker.with_name(marker.name + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("stale", encoding="utf-8")
+        old = _time.time() - 3600
+        _os.utime(lock, (old, old))
+
+        called = []
+        monkeypatch.setattr(bm25_mod, "rebuild_longterm_bm25_index", lambda d: called.append(d))
+
+        assert maybe_rebuild_dirty_longterm_bm25(tmp_path) is True
+        assert called == [tmp_path]
+        assert not lock.exists()  # released after rebuild
