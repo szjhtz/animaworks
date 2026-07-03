@@ -535,11 +535,13 @@ class Neo4jGraphBackend(MemoryBackend):
             from core.memory.graph.community import CommunityDetector
             from core.memory.graph.queries import FIND_ENTITY_NEIGHBORS
 
+            bg_model, _, bg_credential = self._resolve_extraction_config()
             detector = CommunityDetector(
                 driver,
                 self._group_id,
-                model=self._resolve_background_model(),
+                model=bg_model,
                 locale=self._resolve_locale(),
+                credential=bg_credential,
             )
 
             for entity_uuid in new_entity_uuids:

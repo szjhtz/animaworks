@@ -437,3 +437,27 @@ class TestResolveExtractionConfigHardening:
         if "timeout" in llm_extra:
             assert isinstance(llm_extra["timeout"], int) and llm_extra["timeout"] > 0
         assert credential == ""
+
+    def test_background_model_adopted_with_explicit_credential(self, tmp_path):
+        # Legacy semantics (#240): background_model is adopted when its
+        # credential resolves (explicit background_credential here).
+        import json
+
+        from core.memory.backend.neo4j_graph import Neo4jGraphBackend
+
+        (tmp_path / "status.json").write_text(
+            json.dumps(
+                {
+                    "background_model": "openai/qwen3.5-122b-a10b-chat",
+                    "background_credential": "vllm-lb",
+                }
+            ),
+            encoding="utf-8",
+        )
+        backend = Neo4jGraphBackend(tmp_path)
+
+        model, llm_extra, credential = backend._resolve_extraction_config()
+
+        assert model == "openai/qwen3.5-122b-a10b-chat"
+        assert credential == "vllm-lb"
+        assert set(llm_extra) <= {"timeout"}
