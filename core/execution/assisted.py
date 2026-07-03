@@ -55,7 +55,13 @@ from core.execution.base import (
     tool_input_save_budget,
     tool_result_save_budget,
 )
-from core.execution.error_classifier import FailoverReason, classify_llm_error, provider_family_of
+from core.execution.error_classifier import (
+    FailoverReason,
+    classify_llm_error,
+    guard_key,
+    litellm_realm_of,
+    provider_family_of,
+)
 from core.execution.loop_guards import (
     LlmCallInterrupted,
     RunawayGuard,
@@ -421,14 +427,17 @@ class AssistedExecutor(BaseExecutor):
 
         return await litellm.acompletion(**kwargs)
 
-    def _make_llm_error_reporter(self, family: str) -> Any:
-        """Build the per-attempt error callback for call_llm_with_retry."""
+    def _make_llm_error_reporter(self, key: str) -> Any:
+        """Build the per-attempt error callback for call_llm_with_retry.
+
+        ``key`` is the realm-qualified guard key (``guard_key(family, realm)``).
+        """
         guard = get_rate_guard()
 
         def _report(reason: Any, hint: Any, exc: Exception, attempt: int) -> None:
             if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
                 guard.report_block(
-                    family,
+                    key,
                     hint.backoff_s or guard.config.default_block_seconds,
                     reason.value,
                 )
@@ -452,6 +461,7 @@ class AssistedExecutor(BaseExecutor):
         retry is the single retry authority for the wrapped call.
         """
         family = provider_family_of(self._model_config.model)
+        key = guard_key(family, litellm_realm_of(self._model_config.model))
         return await call_llm_with_retry(
             partial(
                 self._call_llm,
@@ -462,7 +472,7 @@ class AssistedExecutor(BaseExecutor):
             classify=partial(classify_llm_error, provider_family=family),
             next_backoff=decorrelated_jitter,
             interrupt_check=self._check_interrupted,
-            on_classified_error=self._make_llm_error_reporter(family),
+            on_classified_error=self._make_llm_error_reporter(key),
         )
 
     async def execute(

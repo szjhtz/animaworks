@@ -59,7 +59,13 @@ from core.execution.base import (
     ToolCallRecord,
     strip_thinking_tags,
 )
-from core.execution.error_classifier import FailoverReason, classify_llm_error, provider_family_of
+from core.execution.error_classifier import (
+    FailoverReason,
+    classify_llm_error,
+    guard_key,
+    litellm_realm_of,
+    provider_family_of,
+)
 from core.execution.loop_guards import (
     EmptyResponseTracker,
     LlmCallInterrupted,
@@ -170,16 +176,18 @@ class LiteLLMExecutor(
         max_iterations = max_turns_override or self._model_config.max_turns
 
         # Pre-flight rate-guard query.  This is observability-only: the session
-        # continues even when the family is guarded and relies on LiteLLM's own
+        # continues even when the realm is guarded and relies on LiteLLM's own
         # retries — the guard's job is fleet-wide suppression at the one-shot
-        # layer, not deferring Mode A cycles.
+        # layer, not deferring Mode A cycles.  The realm is derived from the
+        # model prefix (bedrock/vertex authenticate against distinct creds).
         _guard_family = provider_family_of(self._model_config.model)
+        _guard_key = guard_key(_guard_family, litellm_realm_of(self._model_config.model))
         _guard = get_rate_guard()
-        _guard_blocked = _guard.blocked_remaining(_guard_family)
+        _guard_blocked = _guard.blocked_remaining(_guard_key)
         if _guard_blocked > 0:
             logger.info(
                 "A session start: %s rate-guarded for %.0fs (continuing; retries apply)",
-                _guard_family,
+                _guard_key,
                 _guard_blocked,
             )
 
@@ -196,7 +204,7 @@ class LiteLLMExecutor(
         def _on_llm_error(reason: Any, hint: Any, exc: Exception, attempt: int) -> None:
             if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
                 _guard.report_block(
-                    _guard_family,
+                    _guard_key,
                     hint.backoff_s or _guard.config.default_block_seconds,
                     reason.value,
                 )
@@ -282,6 +290,8 @@ class LiteLLMExecutor(
             except LLMAPIError:
                 raise
             except Exception as e:
+                # Classification + guard reporting happen per-attempt inside
+                # call_llm_with_retry via _on_llm_error.
                 logger.exception("LiteLLM API error")
                 raise LLMAPIError(f"LiteLLM API error: {e}") from e
 

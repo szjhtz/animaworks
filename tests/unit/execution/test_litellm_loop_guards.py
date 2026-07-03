@@ -157,7 +157,7 @@ class TestInLoopRetry:
             result = await executor.execute("test", system_prompt="sys")
         assert "ok" in result.text
         _mock_rate_guard.report_block.assert_called_once()
-        assert _mock_rate_guard.report_block.call_args.args[0] == "openai"
+        assert _mock_rate_guard.report_block.call_args.args[0] == "openai:api"
 
     async def test_retry_budget_exhausted_raises(self, executor):
         mock = AsyncMock(side_effect=_RateLimitError("too many requests"))

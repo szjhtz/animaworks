@@ -38,7 +38,13 @@ from core.execution.base import (
     strip_untagged_thinking,
     supports_streaming_tool_use,
 )
-from core.execution.error_classifier import FailoverReason, classify_llm_error, provider_family_of
+from core.execution.error_classifier import (
+    FailoverReason,
+    classify_llm_error,
+    guard_key,
+    litellm_realm_of,
+    provider_family_of,
+)
 from core.execution.loop_guards import LlmCallInterrupted, call_llm_with_retry
 from core.execution.rate_guard import get_rate_guard
 from core.execution.reminder import (
@@ -53,13 +59,16 @@ from core.schemas import ImageData
 logger = logging.getLogger("animaworks.execution.litellm_loop")
 
 
-def _make_rate_guard_reporter(guard: Any, family: str, label: str) -> Any:
-    """Build the per-attempt error callback for call_llm_with_retry."""
+def _make_rate_guard_reporter(guard: Any, key: str, label: str) -> Any:
+    """Build the per-attempt error callback for call_llm_with_retry.
+
+    ``key`` is the realm-qualified guard key (``guard_key(family, realm)``).
+    """
 
     def _report(reason: Any, hint: Any, exc: Exception, attempt: int) -> None:
         if reason in (FailoverReason.RATE_LIMIT, FailoverReason.OVERLOADED):
             guard.report_block(
-                family,
+                key,
                 hint.backoff_s or guard.config.default_block_seconds,
                 reason.value,
             )
@@ -240,6 +249,7 @@ class StreamingMixin:
                 # keep the pre-existing fail-fast behavior.
                 if iteration == 0:
                     _guard_family_s = provider_family_of(self._model_config.model)
+                    _guard_key_s = guard_key(_guard_family_s, litellm_realm_of(self._model_config.model))
                     try:
                         response = cast(
                             Any,
@@ -252,7 +262,7 @@ class StreamingMixin:
                                 interrupt_check=self._check_interrupted,
                                 on_classified_error=_make_rate_guard_reporter(
                                     get_rate_guard(),
-                                    _guard_family_s,
+                                    _guard_key_s,
                                     "A stream",
                                 ),
                             ),
@@ -929,6 +939,7 @@ class StreamingMixin:
                     # num_retries=0: in-loop retry is the single retry
                     # authority on the wrapped call.
                     _guard_family_ol = provider_family_of(self._model_config.model)
+                    _guard_key_ol = guard_key(_guard_family_ol, litellm_realm_of(self._model_config.model))
                     try:
                         response = cast(
                             Any,
@@ -939,7 +950,7 @@ class StreamingMixin:
                                 interrupt_check=self._check_interrupted,
                                 on_classified_error=_make_rate_guard_reporter(
                                     get_rate_guard(),
-                                    _guard_family_ol,
+                                    _guard_key_ol,
                                     "A ollama stream",
                                 ),
                             ),

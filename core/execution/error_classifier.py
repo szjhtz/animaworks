@@ -111,6 +111,34 @@ _ANTHROPIC_FAMILY_RE = re.compile(
 )
 
 
+def guard_key(family: str, realm: str) -> str:
+    """Build a rate-guard key from a provider *family* and credential *realm*.
+
+    The realm separates credential pools that share a family but not a quota:
+    the LiteLLM ``api`` key, the Mode-S subscription (``max``) or cloud auth
+    (``bedrock`` / ``vertex``), and the Codex CLI (``codex``).  Keying by
+    ``<family>:<realm>`` means a 429 on the API key does not block the
+    independently-authenticated Agent SDK, while callers sharing a realm still
+    protect each other.
+    """
+    return f"{family}:{realm}"
+
+
+def litellm_realm_of(model: str) -> str:
+    """Derive the credential realm for a LiteLLM call from the model prefix.
+
+    Bedrock and Vertex calls authenticate against distinct cloud credentials
+    (not the direct API key), so a 429 there must be tracked separately from
+    the ``api`` realm.
+    """
+    m = (model or "").strip().lower()
+    if m.startswith(("bedrock/", "bedrock-")):
+        return "bedrock"
+    if m.startswith("vertex_ai/"):
+        return "vertex"
+    return "api"
+
+
 def provider_family_of(model: str) -> str:
     """Map a model identifier to its provider family for rate-guard keying.
 
@@ -527,5 +555,7 @@ __all__ = [
     "FailoverReason",
     "RecoveryHint",
     "classify_llm_error",
+    "guard_key",
+    "litellm_realm_of",
     "provider_family_of",
 ]
