@@ -166,6 +166,14 @@ class TestInLoopRetry:
         # 1 initial + MAX_LLM_RETRIES(3)
         assert mock.call_count == 4
 
+    async def test_inner_litellm_retries_disabled(self, executor):
+        """num_retries=0 on wrapped calls — in-loop retry is the single authority."""
+        resp = make_litellm_response(content="ok", tool_calls=None)
+        mock = AsyncMock(side_effect=[resp])
+        with patch("litellm.acompletion", mock):
+            await executor.execute("test", system_prompt="sys")
+        assert mock.call_args_list[0].kwargs.get("num_retries") == 0
+
     async def test_interrupt_during_retry_backoff(
         self, model_config, anima_dir, tool_handler, memory
     ):
@@ -268,6 +276,20 @@ class TestRunawayGuard:
             for m in last_kwargs["messages"]
         )
         # Only 4 tool executions happened (the 5th batch was blocked)
+        assert len(result.tool_call_records) == 4
+
+    async def test_tool_call_after_halt_finalizes_immediately(self, executor):
+        """If the model keeps calling tools after HALT (e.g. Bedrock keeps
+        toolConfig), the loop finalizes instead of burning iterations."""
+        responses = [self._identical_tool_resp() for _ in range(7)]
+        mock = AsyncMock(side_effect=responses)
+        with patch("litellm.acompletion", mock):
+            result = await executor.execute(
+                "test", system_prompt="sys", max_turns_override=10
+            )
+        # 5 identical (halt at 5th, blocked) + 1 post-halt tool call → finalize
+        assert mock.call_count == 6
+        assert result.truncated is True
         assert len(result.tool_call_records) == 4
 
     async def test_varied_calls_do_not_trigger_guard(self, executor):

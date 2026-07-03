@@ -327,6 +327,7 @@ class AssistedExecutor(BaseExecutor):
         self,
         messages: list[dict[str, Any]],
         max_tokens_override: int | None = None,
+        num_retries_override: int | None = None,
     ) -> Any:
         """Call LiteLLM ``acompletion`` without tools parameter."""
         import litellm
@@ -360,7 +361,9 @@ class AssistedExecutor(BaseExecutor):
             "messages": messages,
             "max_tokens": _eff_max,
             "timeout": self._resolve_llm_timeout(),
-            "num_retries": self._resolve_num_retries(),
+            "num_retries": (
+                num_retries_override if num_retries_override is not None else self._resolve_num_retries()
+            ),
         }
 
         api_key = self._resolve_api_key()
@@ -443,10 +446,19 @@ class AssistedExecutor(BaseExecutor):
         messages: list[dict[str, Any]],
         max_tokens_override: int | None = None,
     ) -> Any:
-        """``_call_llm`` wrapped with in-loop transient-error retry."""
+        """``_call_llm`` wrapped with in-loop transient-error retry.
+
+        LiteLLM's internal retries are disabled on this path — the in-loop
+        retry is the single retry authority for the wrapped call.
+        """
         family = provider_family_of(self._model_config.model)
         return await call_llm_with_retry(
-            partial(self._call_llm, messages, max_tokens_override=max_tokens_override),
+            partial(
+                self._call_llm,
+                messages,
+                max_tokens_override=max_tokens_override,
+                num_retries_override=0,
+            ),
             classify=partial(classify_llm_error, provider_family=family),
             next_backoff=decorrelated_jitter,
             interrupt_check=self._check_interrupted,

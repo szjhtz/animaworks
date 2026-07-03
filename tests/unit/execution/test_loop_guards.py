@@ -57,7 +57,8 @@ class TestCallLlmWithRetry:
         )
         assert result == "ok"
         assert call.call_count == 2
-        sleep.assert_awaited_once_with(1.5)
+        # Backoff is slept in 1s chunks (interruptibility) — total must match
+        assert sum(c.args[0] for c in sleep.await_args_list) == pytest.approx(1.5)
 
     async def test_provider_backoff_takes_precedence(self):
         call = AsyncMock(side_effect=[RuntimeError("429"), "ok"])
@@ -68,7 +69,7 @@ class TestCallLlmWithRetry:
             next_backoff=lambda prev: 1.5,
             sleep=sleep,
         )
-        sleep.assert_awaited_once_with(7.0)
+        assert sum(c.args[0] for c in sleep.await_args_list) == pytest.approx(7.0)
 
     async def test_terminal_error_raises_immediately(self):
         err = RuntimeError("401")
@@ -112,18 +113,22 @@ class TestCallLlmWithRetry:
         assert call.call_count == 1
         sleep.assert_not_awaited()
 
-    async def test_interrupt_after_sleep_raises(self):
+    async def test_interrupt_during_chunked_backoff_raises(self):
+        """A long backoff is aborted at the next 1s chunk boundary."""
         call = AsyncMock(side_effect=RuntimeError("429"))
         checks = iter([False, True])
+        sleep = AsyncMock()
         with pytest.raises(LlmCallInterrupted):
             await call_llm_with_retry(
                 call,
                 classify=_classifier(retryable=True),
-                next_backoff=lambda prev: 0.0,
+                next_backoff=lambda prev: 60.0,
                 interrupt_check=lambda: next(checks),
-                sleep=AsyncMock(),
+                sleep=sleep,
             )
         assert call.call_count == 1
+        # Only the first 1s chunk was slept — not the full 60s
+        assert sum(c.args[0] for c in sleep.await_args_list) == pytest.approx(1.0)
 
     async def test_on_classified_error_called_per_attempt(self):
         call = AsyncMock(side_effect=[RuntimeError("a"), RuntimeError("b"), "ok"])

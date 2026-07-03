@@ -163,6 +163,10 @@ class LiteLLMExecutor(
         all_response_text: list[str] = []
         all_tool_records: list[ToolCallRecord] = []
         llm_kwargs = self._build_llm_kwargs()
+        # In-loop retry (call_llm_with_retry) is the single retry authority on
+        # this path — LiteLLM's internal retries would multiply the effective
+        # attempt count (worst case ~16) past the specified maximum of 3.
+        llm_kwargs["num_retries"] = 0
         max_iterations = max_turns_override or self._model_config.max_turns
 
         # Pre-flight rate-guard query.  This is observability-only: the session
@@ -462,6 +466,27 @@ class LiteLLMExecutor(
                     _, _content = strip_thinking_tags(_content)
                     all_response_text.append(_content)
                 continue
+
+            # ── Runaway halt follow-up: the model kept calling tools even
+            # after finalization was forced (Bedrock keeps toolConfig for API
+            # compliance) — finalize with what has been gathered instead of
+            # burning the remaining iterations.
+            if _force_final:
+                logger.warning(
+                    "A tool call after forced finalization at iteration=%d — finalizing",
+                    iteration,
+                )
+                if _content:
+                    _, _content = strip_thinking_tags(_content)
+                    if _content:
+                        all_response_text.append(_content)
+                cleanup_gate_marker(self._anima_dir)
+                return ExecutionResult(
+                    text="\n".join(all_response_text) or "(tool loop halted)",
+                    tool_call_records=all_tool_records,
+                    usage=usage_acc,
+                    truncated=True,
+                )
 
             # ── Runaway guard: consecutive identical tool-call turns ──
             _turn_sig = tuple(tool_call_signature(tc["name"], tc["arguments"]) for tc in parsed_calls)

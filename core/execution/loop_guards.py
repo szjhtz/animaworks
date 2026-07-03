@@ -117,9 +117,15 @@ async def call_llm_with_retry(
                 max_retries,
                 delay,
             )
-            await sleep(delay)
-            if interrupt_check is not None and interrupt_check():
-                raise LlmCallInterrupted() from exc
+            # Sleep in 1s chunks so an interrupt (chat collision) aborts the
+            # wait within a second instead of blocking for the full backoff
+            # (up to 120s / Retry-After).
+            remaining = delay
+            while remaining > 0:
+                await sleep(min(1.0, remaining))
+                remaining -= 1.0
+                if interrupt_check is not None and interrupt_check():
+                    raise LlmCallInterrupted() from exc
     # Unreachable: the last loop iteration either returns or raises.
     raise RuntimeError("call_llm_with_retry exited without result")  # pragma: no cover
 

@@ -244,7 +244,9 @@ class StreamingMixin:
                         response = cast(
                             Any,
                             await call_llm_with_retry(
-                                partial(litellm.acompletion, **call_kwargs),
+                                # num_retries=0: in-loop retry is the single
+                                # retry authority on the wrapped call.
+                                partial(litellm.acompletion, **{**call_kwargs, "num_retries": 0}),
                                 classify=partial(classify_llm_error, provider_family=_guard_family_s),
                                 next_backoff=decorrelated_jitter,
                                 interrupt_check=self._check_interrupted,
@@ -924,12 +926,14 @@ class StreamingMixin:
                 elif iteration == 0:
                     # In-loop retry only before the first event is yielded
                     # (iteration 0) — same rule as token-level streaming.
+                    # num_retries=0: in-loop retry is the single retry
+                    # authority on the wrapped call.
                     _guard_family_ol = provider_family_of(self._model_config.model)
                     try:
                         response = cast(
                             Any,
                             await call_llm_with_retry(
-                                partial(litellm.acompletion, **call_kwargs),
+                                partial(litellm.acompletion, **{**call_kwargs, "num_retries": 0}),
                                 classify=partial(classify_llm_error, provider_family=_guard_family_ol),
                                 next_backoff=decorrelated_jitter,
                                 interrupt_check=self._check_interrupted,

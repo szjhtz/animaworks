@@ -116,6 +116,14 @@ class TestModeBRetry:
         assert "ok" in result.text
         _mock_rate_guard.report_block.assert_called_once()
 
+    async def test_inner_litellm_retries_disabled(self, executor):
+        """num_retries=0 on wrapped calls — in-loop retry is the single authority."""
+        final = make_litellm_response(content="ok", tool_calls=None)
+        with patch_litellm() as mock:
+            mock.side_effect = [final]
+            await executor.execute("test", system_prompt="sys")
+        assert mock.call_args_list[0].kwargs.get("num_retries") == 0
+
 
 # ── Empty-response recovery (shared with intent reprompts) ───
 
